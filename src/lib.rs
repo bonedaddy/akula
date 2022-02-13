@@ -13,7 +13,7 @@
     integer_atomics,
     async_closure,
     const_try,
-    let_chains
+    inline_const
 )]
 #![recursion_limit = "256"]
 #![allow(
@@ -32,7 +32,6 @@ pub mod chain;
 pub mod consensus;
 pub mod crypto;
 pub mod downloader;
-mod downloader2;
 pub mod etl;
 pub mod execution;
 pub mod kv;

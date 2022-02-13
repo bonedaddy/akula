@@ -1,7 +1,7 @@
-use super::{header::BlockHeaders, PeerId};
+use super::{header::BlockHeaders, HeaderRequest, PeerId};
 use crate::{
     models::H256,
-    sentry2::types::{GetBlockHeaders, NewBlock, NewBlockHashes},
+    sentry2::types::{BlockId, GetBlockHeaders, GetBlockHeadersParams, NewBlock, NewBlockHashes},
 };
 use ethereum_interfaces::sentry as grpc_sentry;
 use rlp_derive::{RlpDecodableWrapper, RlpEncodableWrapper};
@@ -11,7 +11,7 @@ pub struct InboundMessage {
     pub msg: Message,
     pub peer_id: PeerId,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumIter)]
 pub enum MessageId {
     Status = 0,
     NewBlockHashes = 1,
@@ -31,7 +31,6 @@ pub enum MessageId {
 }
 
 impl MessageId {
-    #[inline(always)]
     pub fn from_i32(i: i32) -> Result<Self, InvalidMessageId> {
         match grpc_sentry::MessageId::from_i32(i).unwrap() {
             grpc_sentry::MessageId::Status66 => Ok(MessageId::Status),
@@ -107,8 +106,25 @@ pub enum Message {
     NewPooledTransactionHashes(NewPooledTransactionHashes),
 }
 
+impl From<HeaderRequest> for Message {
+    fn from(req: HeaderRequest) -> Self {
+        Message::GetBlockHeaders(GetBlockHeaders {
+            request_id: rand::Rng::gen::<u64>(&mut rand::thread_rng()),
+            params: GetBlockHeadersParams {
+                start: if req.hash.is_some() {
+                    BlockId::Hash(req.hash.unwrap())
+                } else {
+                    BlockId::Number(req.number)
+                },
+                limit: req.limit,
+                skip: if req.hash.is_some() { 1 } else { 0 },
+                reverse: if req.reverse { 1 } else { 0 },
+            },
+        })
+    }
+}
+
 impl Message {
-    #[inline(always)]
     pub const fn id(&self) -> MessageId {
         match self {
             Self::NewBlockHashes(_) => MessageId::NewBlockHashes,

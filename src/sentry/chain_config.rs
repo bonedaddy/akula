@@ -24,7 +24,7 @@ impl ChainConfig {
         }
     }
 
-    pub fn network_id(&self) -> NetworkId {
+    pub const fn network_id(&self) -> NetworkId {
         self.chain_spec.params.network_id
     }
 
@@ -32,21 +32,27 @@ impl ChainConfig {
         self.chain_spec.name.to_lowercase()
     }
 
-    pub fn chain_spec(&self) -> &ChainSpec {
+    pub const fn chain_spec(&self) -> &ChainSpec {
         &self.chain_spec
     }
 
-    pub fn genesis_block_hash(&self) -> ethereum_types::H256 {
+    pub const fn genesis_block_hash(&self) -> ethereum_types::H256 {
         self.genesis_block_hash
     }
 
     pub fn fork_block_numbers(&self) -> Vec<BlockNumber> {
-        self.chain_spec.gather_forks().iter().cloned().collect()
+        self.chain_spec.gather_forks().iter().copied().collect()
+    }
+}
+
+impl Default for ChainsConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl ChainsConfig {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new() -> Self {
         let mut configs = HashMap::<String, ChainConfig>::new();
         configs.insert(
             String::from("mainnet"),
@@ -64,7 +70,7 @@ impl ChainsConfig {
             String::from("rinkeby"),
             ChainConfig::new(crate::res::chainspec::RINKEBY.clone()),
         );
-        Ok(ChainsConfig(configs))
+        ChainsConfig(configs)
     }
 
     pub fn get(&self, chain_name: &str) -> anyhow::Result<ChainConfig> {

@@ -1,6 +1,6 @@
 use crate::models::{Block, BlockNumber, H256};
 use rlp_derive::*;
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum BlockId {
     Hash(H256),
     Number(BlockNumber),

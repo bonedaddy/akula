@@ -142,7 +142,7 @@ async fn blockhashes(data_dir: AkulaDataDir) -> anyhow::Result<()> {
 
 #[allow(unreachable_code)]
 async fn header_download(data_dir: AkulaDataDir, opts: HeaderDownloadOpts) -> anyhow::Result<()> {
-    let chains_config = akula::sentry::chain_config::ChainsConfig::new()?;
+    let chains_config = akula::sentry::chain_config::ChainsConfig::new();
     let chain_config = chains_config.get(&opts.chain_name)?;
 
     let sentry_api_addr = opts.sentry_api_addr.clone();

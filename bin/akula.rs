@@ -580,7 +580,7 @@ fn main() -> anyhow::Result<()> {
             rt.block_on(async move {
                 info!("Starting Akula ({})", version_string());
 
-                let chains_config = akula::sentry::chain_config::ChainsConfig::new()?;
+                let chains_config = akula::sentry::chain_config::ChainsConfig::new();
                 let chain_config = chains_config.get(&opt.chain_name)?;
 
                 // database setup

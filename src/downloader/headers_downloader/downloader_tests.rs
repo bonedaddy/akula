@@ -28,7 +28,7 @@ use std::{
 use tokio::sync::Mutex as AsyncMutex;
 
 fn make_chain_config() -> chain_config::ChainConfig {
-    let chains_config = chain_config::ChainsConfig::new().unwrap();
+    let chains_config = chain_config::ChainsConfig::new();
     let chain_name = "mainnet";
     chains_config.get(chain_name).unwrap()
 }

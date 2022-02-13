@@ -1,6 +1,6 @@
 use crate::{
     models::{BlockHeader, BlockNumber, H256},
-    sentry2::types::BlockId,
+    sentry2::types::*,
 };
 use rlp_derive::*;
 
@@ -12,19 +12,19 @@ impl From<BlockNumber> for u64 {
 
 #[derive(Debug, Clone)]
 pub struct HeaderRequest {
-    pub hash: H256,
+    pub hash: Option<H256>,
     pub number: BlockNumber,
     pub limit: u64,
-    pub skip: Option<u64>,
+    pub skip: u64,
     pub reverse: bool,
 }
 
 impl HeaderRequest {
     pub fn new(
-        hash: H256,
+        hash: Option<H256>,
         number: BlockNumber,
         limit: u64,
-        skip: Option<u64>,
+        skip: u64,
         reverse: bool,
     ) -> Self {
         Self {
@@ -43,7 +43,7 @@ impl Default for HeaderRequest {
             hash: Default::default(),
             number: Default::default(),
             limit: 192,
-            skip: None,
+            skip: 0,
             reverse: false,
         }
     }
