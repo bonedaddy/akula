@@ -101,7 +101,7 @@ impl SentryCoordinator for Coordinator {
     }
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()> {
         self.set_status().await?;
-        self.send_message(req.clone().into(), PeerFilter::All)
+        self.send_message(req.clone().into(), PeerFilter::Random(5))
             .await?;
 
         Ok(())

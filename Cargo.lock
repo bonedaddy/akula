@@ -50,6 +50,7 @@ dependencies = [
  "ethereum-types",
  "ethnum",
  "evmodin",
+ "fastrand",
  "fdlimit",
  "futures-core",
  "futures-util",

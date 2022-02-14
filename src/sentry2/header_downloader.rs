@@ -3,16 +3,11 @@ use crate::{
     models::{BlockHeader, BlockNumber, H256},
     sentry2::{types::*, Coordinator, SentryCoordinator},
 };
-use anyhow::anyhow;
 use futures_util::FutureExt;
 use hashbrown::HashSet;
-use rayon::{
-    iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator},
-    slice::ParallelSlice,
-};
-use std::{sync::Arc, time::Duration};
-use tokio::sync::{broadcast, mpsc, Semaphore};
-use tracing::{info, warn};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
+use tokio::sync::{broadcast, mpsc};
+use tracing::info;
 
 use super::broadcast_stream;
 
@@ -20,64 +15,59 @@ const CHUNK_SIZE: usize = 32;
 
 const BATCH_SIZE: usize = 98304 * 4;
 
-const INTERVAL: Duration = Duration::from_secs(5);
+const INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct HeaderDownloader {
     coordinator: Arc<Coordinator>,
     preverified: HashSet<H256>,
-    requests: Vec<Vec<HeaderRequest>>,
+    requests: Vec<HeaderRequest>,
     pending: Vec<BlockHeader>,
 }
 
-fn dummy_verify(headers: &mut Vec<BlockHeader>) -> anyhow::Result<()> {
-    headers.dedup_by(|a, b| (a.number == b.number) || (a.hash() == b.hash()));
-    let mut last_number = 0;
-    let mut last_timestamp = 0;
-    for header in headers.iter() {
-        if header.number.0 <= last_number || header.timestamp <= last_timestamp {
-            return Err(anyhow!("invalid header: {:#?}", header));
-        };
-        last_number = header.number.0;
-        last_timestamp = header.timestamp;
-    }
-    Ok(())
-}
-
-async fn worker(
-    c: Arc<Coordinator>,
-    req: HeaderRequest,
-    mut rx: broadcast::Receiver<InboundMessage>,
+async fn new_worker(
+    coordinator: Arc<Coordinator>,
+    rx: async_channel::Receiver<HeaderRequest>,
     tx: mpsc::Sender<Vec<BlockHeader>>,
+    mut msg_rx: broadcast::Receiver<InboundMessage>,
 ) {
     let mut timer = tokio::time::interval(INTERVAL);
+    let mut req: Option<HeaderRequest>;
+    match rx.recv().await {
+        Ok(v) => req = Some(v),
+        _ => unreachable!(),
+    }
+    coordinator
+        .send_header_request(req.clone().unwrap())
+        .await
+        .unwrap();
 
     loop {
         futures_util::select! {
-            _ = timer.tick().fuse() => {
-                let _ = c.send_header_request(req.clone()).await;
+             _ = timer.tick().fuse() => {
+                coordinator.send_header_request(req.clone().unwrap()).await.unwrap();
             }
-            msg = rx.recv().fuse() => {
-                let msg = msg.unwrap();
-                let peer_id = msg.peer_id;
+            msg = msg_rx.recv().fuse() => {
+                let msg = match msg {
+                    Ok(v) => v,
+                    _ => continue,
+                };
                 match msg.msg {
-                    Message::BlockHeaders(v) => {
-                        if v.headers.len() != 192
-                        {
-                            warn!("Penalizing peer for invalid payload {:#?}", peer_id);
-                            let penalty = Penalty::new(peer_id, PenaltyKind::default());
-                            c.penalize_peer(penalty).await.unwrap();
+                    Message::BlockHeaders(value) => {
+                        let headers = value.headers;
+                        if headers.len() != 192 {
                             continue;
                         }
-
-                        // FIXME: Replace with another concurrency primitive, because rn each worker receives all messages.
-                        if v.headers.first().unwrap().hash() == req.hash.unwrap() {
-                            tx.send(v.headers).await.unwrap();
-                            return;
+                        if headers[0].clone().number.0 == req.clone().unwrap().number.0 {
+                            tx.send(headers).await.unwrap();
+                            match rx.recv().await {
+                                Ok(v) => req = Some(v),
+                                _ => return,
+                            }
                         }
+                        coordinator.send_header_request(req.clone().unwrap()).await.unwrap();
                     }
                     _ => unreachable!(),
                 }
-
             }
         }
     }
@@ -85,78 +75,71 @@ async fn worker(
 
 impl HeaderDownloader {
     pub fn new(coordinator: Arc<Coordinator>) -> Self {
-        // FIXME: Replace with normal initialization.
-        let hashes = PreverifiedHashesConfig::new("mainnet").unwrap().hashes;
-        let requests = Self::prepare_requests(hashes.clone());
-        let preverified = hashes
-            .into_iter()
-            .map(|h| h.into())
-            .collect::<HashSet<H256>>();
+        let chunks =
+            Self::prepare_requests(PreverifiedHashesConfig::new("mainnet").unwrap().hashes);
 
         Self {
             coordinator,
-            preverified,
-            requests,
+            requests: chunks,
+            preverified: HashSet::new(),
             pending: Vec::new(),
         }
     }
 
     pub async fn spin(&mut self) -> anyhow::Result<()> {
+        let mut queue = VecDeque::new();
+        self.requests
+            .clone()
+            .into_iter()
+            .for_each(|request| queue.push_back(request));
+
+        let (tx, rx) = async_channel::bounded::<HeaderRequest>(CHUNK_SIZE * 4);
         let (msg_tx, _) = broadcast::channel::<InboundMessage>(CHUNK_SIZE * 4);
-        let c = self.coordinator.clone();
-        tokio::spawn(broadcast_stream::<InboundMessage, _>(
-            c.recv_headers().await?,
+        let (tx_headers, mut rx_headers) = mpsc::channel(CHUNK_SIZE * 2);
+
+        tokio::spawn(broadcast_stream(
+            self.coordinator.clone().recv_headers().await?,
             msg_tx.clone(),
         ));
-
-        let (headers_tx, mut headers_rx) = mpsc::channel(CHUNK_SIZE * 16);
-        let sema = Arc::new(Semaphore::new(CHUNK_SIZE));
-
-        for chunk in self.requests.clone().into_iter() {
-            let mut join_handler = Vec::new();
-
-            for request in chunk {
-                let permit = sema.clone().acquire_owned().await?;
+        let pool = (0..CHUNK_SIZE)
+            .map(|_| {
                 let c = self.coordinator.clone();
+                let rx = rx.clone();
                 let msg_rx = msg_tx.subscribe();
-                let headers_tx = headers_tx.clone();
-                let request = request.clone();
+                tokio::spawn(new_worker(c, rx, tx_headers.clone(), msg_rx))
+            })
+            .collect::<Vec<_>>();
+        tokio::spawn(async move {
+            for _ in 0..CHUNK_SIZE * 2 {
+                tx.send(queue.pop_front().unwrap()).await.unwrap();
+            }
+            info!("Header downloader started");
 
-                join_handler.push(tokio::spawn(async move {
-                    worker(c, request, msg_rx, headers_tx).await;
-                    drop(permit);
-                }))
+            let mut headers = Vec::new();
+            while let Some(value) = rx_headers.recv().await {
+                headers.extend(value);
+                if queue.is_empty() {
+                    return;
+                }
+                tx.send(queue.pop_front().unwrap()).await.unwrap();
+                info!("{} of {} headers", headers.len(), 13824000);
             }
+        });
 
-            for task in join_handler {
-                task.await.unwrap();
-            }
-
-            while let Ok(h) = headers_rx.try_recv() {
-                self.pending.extend(h);
-            }
-            if self.pending.len() >= BATCH_SIZE {
-                let mut headers = self.pending.drain(..BATCH_SIZE).collect::<Vec<_>>();
-                let _ = dummy_verify(&mut headers).unwrap();
-                info!("Successfully verified {} headers", BATCH_SIZE);
-            }
-            info!("Downloading BlockHeaders {}", self.pending.len());
+        for w in pool {
+            w.await.unwrap();
         }
-
         Ok(())
     }
 
-    fn prepare_requests(hashes: Vec<H256>) -> Vec<Vec<HeaderRequest>> {
-        let chunks = hashes
-            .into_par_iter()
+    fn prepare_requests(hashes: Vec<H256>) -> Vec<HeaderRequest> {
+        let requests = hashes
+            .into_iter()
             .enumerate()
             .map(|(i, hash)| {
                 HeaderRequest::new(Some(hash), BlockNumber(i as u64 * 192), 192, 0, false)
             })
-            .collect::<Vec<_>>()
-            .par_chunks(32)
-            .map(|chunk| chunk.into())
-            .collect::<Vec<Vec<_>>>();
-        chunks
+            .collect::<Vec<_>>();
+        requests
     }
 }

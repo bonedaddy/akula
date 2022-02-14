@@ -93,6 +93,7 @@ triehash = "0.8"
 walkdir = "2"
 async-channel = { git = "https://github.com/smol-rs/async-channel" }
 hashbrown = "0.12"
+fastrand = "1.7.0"
 
 [build-dependencies]
 anyhow = "1"

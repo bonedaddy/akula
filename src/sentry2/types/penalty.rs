@@ -14,8 +14,8 @@ pub enum PenaltyKind {
     TooFarPast,
 }
 
-impl PenaltyKind {
-    pub fn default() -> PenaltyKind {
+impl Default for PenaltyKind {
+    fn default() -> Self {
         PenaltyKind::BadBlock
     }
 }

@@ -109,7 +109,7 @@ pub enum Message {
 impl From<HeaderRequest> for Message {
     fn from(req: HeaderRequest) -> Self {
         Message::GetBlockHeaders(GetBlockHeaders {
-            request_id: rand::Rng::gen::<u64>(&mut rand::thread_rng()),
+            request_id: fastrand::u32(..) as u64,
             params: GetBlockHeadersParams {
                 start: if req.hash.is_some() {
                     BlockId::Hash(req.hash.unwrap())

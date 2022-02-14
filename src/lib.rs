@@ -13,7 +13,8 @@
     integer_atomics,
     async_closure,
     const_try,
-    inline_const
+    inline_const,
+    const_option
 )]
 #![recursion_limit = "256"]
 #![allow(
