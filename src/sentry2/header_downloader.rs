@@ -3,25 +3,13 @@ use crate::{
     models::{BlockHeader, BlockNumber, H256},
     sentry2::{types::*, Coordinator, SentryCoordinator},
 };
-use futures_util::{stream::FuturesUnordered, FutureExt, StreamExt, TryStreamExt};
+use futures_util::{FutureExt, StreamExt};
 use hashbrown::{HashMap, HashSet};
-use itertools::Itertools;
-use std::{
-    collections::VecDeque,
-    ops::{Generator, GeneratorState},
-    pin::Pin,
-    sync::Arc,
-    time::Duration,
-};
-use tokio::sync::{broadcast, mpsc};
+use std::{sync::Arc, time::Duration};
 use tracing::info;
 
-use super::broadcast_stream;
-
 const CHUNK_SIZE: usize = 256;
-
 const BATCH_SIZE: usize = 98304 * 4;
-
 const INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct HeaderDownloader {
@@ -31,6 +19,8 @@ pub struct HeaderDownloader {
     requests: Vec<HashMap<H256, HeaderRequest>>,
     pending: Vec<BlockHeader>,
 }
+
+pub struct Link {}
 
 impl HeaderDownloader {
     pub fn new(coordinator: Arc<Coordinator>) -> Self {
@@ -44,38 +34,34 @@ impl HeaderDownloader {
             pending: Vec::new(),
         }
     }
-
+    #[allow(unreachable_code)]
     pub async fn spin(&mut self) -> anyhow::Result<()> {
         let mut stream = self.coordinator.recv_headers().await?;
         let chunks = self.requests.clone().into_iter();
 
         info!("Starting header downloader");
-        for mut chunk in chunks {
+        for mut chunk in chunks.clone() {
             let mut timer = tokio::time::interval(INTERVAL);
             while chunk.len() > 0 {
                 futures_util::select! {
                     msg = stream.next().fuse() => {
-                        let msg = msg.unwrap();
-                        let msg = match msg.msg {
-                            Message::BlockHeaders(value) => value,
+                        let msg = match msg.unwrap().msg {
+                            Message::BlockHeaders(value) => if value.headers.len() == 192
+                                && chunk.contains_key(&value.headers[0].clone().hash()) {
+                                value
+                            } else {
+                                continue
+                            },
                             _ => continue,
                         };
-                        if msg.headers.len() != 192 {
-                            continue;
-                        }
-                        let first_header_hash = msg.headers[0].clone().hash();
-                        info!("Received headers first header: {:#?}", msg.headers[0]);
-                        if chunk.contains_key(&first_header_hash) {
-                            self.pending.extend(msg.headers);
-                            chunk.remove(&first_header_hash);
-                        }
+                        chunk.remove(&msg.headers[0].clone().hash());
+                        self.pending.extend(msg.headers);
                     }
                     _ = timer.tick().fuse() => {
-                        info!("Sending chunk of size {}", chunk.len());
                         let c = self.coordinator.clone();
                         let mut tasks = Vec::new();
-                        chunk.
-                            clone()
+                        chunk
+                            .clone()
                             .into_iter()
                             .for_each(|(_, v)| {
                                 let c = c.clone();
@@ -88,6 +74,14 @@ impl HeaderDownloader {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    pub async fn download_unverified(&mut self) -> anyhow::Result<()> {
+        let mut stream = self.coordinator.recv_headers();
+        let mut timer = tokio::time::interval(INTERVAL);
+
         Ok(())
     }
 

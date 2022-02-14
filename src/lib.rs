@@ -1,7 +1,5 @@
 #![feature(
     bool_to_option,
-    destructuring_assignment,
-    entry_insert,
     generator_trait,
     generators,
     async_stream,
@@ -14,7 +12,8 @@
     async_closure,
     const_try,
     inline_const,
-    const_option
+    const_option,
+    adt_const_params
 )]
 #![recursion_limit = "256"]
 #![allow(

@@ -10,7 +10,6 @@ use futures_core::Stream;
 use futures_util::{FutureExt, StreamExt};
 use std::{pin::Pin, sync::Arc};
 use tokio::sync::broadcast;
-use tracing::{debug, instrument, warn};
 
 pub type SentryClient = grpc_sentry::sentry_client::SentryClient<tonic::transport::Channel>;
 
@@ -170,18 +169,23 @@ impl SentryCoordinator for Coordinator {
         let mut tasks = Vec::new();
 
         self.sentries.iter().for_each(|s| {
-            tasks.push(async move {
-                s.clone()
+            let sentry = s.clone();
+            tasks.push(tokio::spawn(async move {
+                sentry
+                    .clone()
                     .penalize_peer(grpc_sentry::PenalizePeerRequest {
                         peer_id: Some(penalty.peer_id.into()),
                         penalty: 0,
                     })
                     .await
                     .unwrap();
-            });
+            }));
         });
 
-        futures_util::future::join_all(tasks).await;
+        for task in tasks {
+            let _ = task.await;
+        }
+
         Ok(())
     }
 
@@ -258,21 +262,20 @@ impl SentryCoordinator for Coordinator {
     }
 }
 
-async fn recv_sentry(s: &SentryClient, ids: Vec<i32>) -> SingleSentryStream2 {
+async fn recv_sentry(s: &SentryClient, ids: Vec<i32>) -> SingleSentryStream {
     let mut s = s.clone();
     s.hand_shake(tonic::Request::new(())).await.unwrap();
 
-    let mut stream = SingleSentryStream2(
+    SingleSentryStream(
         s.messages(grpc_sentry::MessagesRequest { ids })
             .await
             .unwrap()
             .into_inner(),
-    );
+    )
 }
+pub struct SingleSentryStream(tonic::codec::Streaming<grpc_sentry::InboundMessage>);
 
-pub type SingleSentryStream = Pin<Box<dyn tokio_stream::Stream<Item = InboundMessage> + Send>>;
-
-pub type CoordinatorStream = futures_util::stream::SelectAll<SingleSentryStream2>;
+pub type CoordinatorStream = futures_util::stream::SelectAll<SingleSentryStream>;
 
 pub async fn broadcast_stream<T, S>(mut stream: S, tx: broadcast::Sender<T>)
 where
@@ -283,28 +286,26 @@ where
     }
 }
 
-pub struct SingleSentryStream2(tonic::codec::Streaming<grpc_sentry::InboundMessage>);
-
-impl std::stream::Stream for SingleSentryStream2 {
+impl tokio_stream::Stream for SingleSentryStream {
     type Item = InboundMessage;
 
     fn poll_next(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        let mut this = self.get_mut();
+        let this = self.get_mut();
         match Pin::new(&mut this.0).poll_next(cx) {
             std::task::Poll::Ready(value) => {
                 if let Some(value) = value {
-                    if let msg_id = match MessageId::from_i32(value.id) {
+                    let value = value.unwrap();
+                    let msg_id = match MessageId::from_i32(value.id) {
                         Ok(id) => Some(id),
                         _ => None,
-                    }
-                    .is_some()
-                    {
-                        let msg = decode_rlp_message(msg_id, &value.data).unwrap();
+                    };
+                    if msg_id.is_some() {
+                        let msg = decode_rlp_message(msg_id.unwrap(), &value.data).unwrap();
                         return std::task::Poll::Ready(Some(InboundMessage {
-                            peer_id: value.peer_id.into(),
+                            peer_id: value.peer_id.unwrap().into(),
                             msg,
                         }));
                     }
@@ -315,37 +316,6 @@ impl std::stream::Stream for SingleSentryStream2 {
         }
     }
 }
-
-// #[instrument(level = "debug", name = "poll_sentry_stream")]
-// fn poll_sentry_stream(
-//     mut stream: tonic::Streaming<grpc_sentry::InboundMessage>,
-// ) -> SingleSentryStream {
-//     Box::pin(async_stream::stream! {
-//         debug!("Starting to poll SingleSentryStream");
-//         while let Some(msg) = stream.next().await {
-//             match msg {
-//                 Ok(message) => {
-//                     let msg_id = match MessageId::from_i32(message.id) {
-//                         Ok(id) => id,
-//                         _ => continue,
-//                     };
-//                     let peer_id = message.peer_id.unwrap_or_default().into();
-//                     let msg = match decode_rlp_message(msg_id, &message.data) {
-//                         Ok(msg) => msg,
-//                         _ => continue,
-//                     };
-//                     let msg = InboundMessage {
-//                         peer_id,
-//                         msg,
-//                     };
-//                     debug!("Received new message from peer: {:?}, msg_id: {:?}", peer_id, msg_id);
-//                     yield msg
-//                 }
-//                 _ => continue,
-//             }
-//         }
-//     })
-// }
 
 #[async_trait]
 #[auto_impl(&, Box, Arc)]
