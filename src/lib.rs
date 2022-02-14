@@ -4,7 +4,7 @@
     entry_insert,
     generator_trait,
     generators,
-    generic_associated_types,
+    async_stream,
     let_else,
     map_first_last,
     never_type,

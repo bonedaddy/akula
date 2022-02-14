@@ -44,22 +44,25 @@ dependencies = [
  "derive_more",
  "directories",
  "educe",
+ "enum-as-inner",
  "ethash",
  "ethereum-forkid",
  "ethereum-interfaces",
  "ethereum-types",
  "ethnum",
- "evmodin",
  "fastrand",
  "fdlimit",
  "futures-core",
  "futures-util",
+ "gen-iter",
+ "getset",
  "hash-db",
  "hash256-std-hasher",
  "hashbrown 0.12.0",
  "hex",
  "hex-literal",
  "http",
+ "i256",
  "itertools",
  "jsonrpsee",
  "libmdbx",
@@ -73,7 +76,7 @@ dependencies = [
  "parity-scale-codec",
  "parking_lot 0.12.0",
  "proptest",
- "rand 0.8.4",
+ "rand 0.8.5",
  "rayon",
  "ripemd",
  "rlp",
@@ -87,6 +90,7 @@ dependencies = [
  "sha3",
  "string",
  "strum",
+ "strum_macros",
  "substrate-bn",
  "tempfile",
  "thiserror",
@@ -881,31 +885,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77f3309417938f28bf8228fcff79a4a37103981e3e186d2ccd19c74b38f4eb71"
 
 [[package]]
-name = "evmodin"
-version = "0.1.0"
-source = "git+https://github.com/vorot93/evmodin?branch=akula-staging#7431f26d18bd445de69d17495d1f972d2310dd3d"
-dependencies = [
- "arrayref",
- "arrayvec",
- "bytes",
- "derive_more",
- "educe",
- "enum-as-inner",
- "ethereum-types",
- "ethnum",
- "getrandom",
- "getset",
- "hex",
- "i256",
- "num-traits",
- "once_cell",
- "serde",
- "serde_json",
- "sha3",
- "strum_macros",
-]
-
-[[package]]
 name = "fastrand"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -930,7 +909,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcf0ed7fe52a17a03854ec54a9f76d6d84508d1c0e66bc1793301c73fc8493c"
 dependencies = [
  "byteorder",
- "rand 0.8.4",
+ "rand 0.8.5",
  "rustc-hex",
  "static_assertions",
 ]
@@ -1047,6 +1026,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "gen-iter"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1668ac3c7b8cc5f1e31565ed509d8d70aa1a81bd7f508b620725b78c6e1d7049"
+
+[[package]]
 name = "generic-array"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1063,10 +1048,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "418d37c8b1d42553c93648be529cb70f920d3baf8ef469b74b9638df426e0b4c"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "wasi",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -1413,7 +1396,7 @@ dependencies = [
  "hyper",
  "jsonrpsee-types",
  "parking_lot 0.12.0",
- "rand 0.8.4",
+ "rand 0.8.5",
  "rustc-hash",
  "serde",
  "serde_json",
@@ -1981,7 +1964,7 @@ dependencies = [
  "lazy_static",
  "num-traits",
  "quick-error 2.0.1",
- "rand 0.8.4",
+ "rand 0.8.5",
  "rand_chacha 0.3.1",
  "rand_xorshift 0.3.0",
  "regex-syntax",
@@ -2079,7 +2062,7 @@ dependencies = [
  "libc",
  "rand_chacha 0.1.1",
  "rand_core 0.4.2",
- "rand_hc 0.1.0",
+ "rand_hc",
  "rand_isaac",
  "rand_jitter",
  "rand_os",
@@ -2090,14 +2073,13 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.8.4"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e7573632e6454cf6b99d7aac4ccca54be06da05aca2ef7423d22d27d4d4bcd8"
+checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
  "rand_core 0.6.3",
- "rand_hc 0.3.1",
 ]
 
 [[package]]
@@ -2151,15 +2133,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b40677c7be09ae76218dc623efbf7b18e34bced3f38883af07bb75630a21bc4"
 dependencies = [
  "rand_core 0.3.1",
-]
-
-[[package]]
-name = "rand_hc"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d51e9f596de227fda2ea6c84607f5558e196eeaf43c986b724ba4fb8fdf497e7"
-dependencies = [
- "rand_core 0.6.3",
 ]
 
 [[package]]
@@ -2666,7 +2639,7 @@ dependencies = [
  "futures",
  "httparse",
  "log",
- "rand 0.8.4",
+ "rand 0.8.5",
  "sha-1",
 ]
 
@@ -2727,7 +2700,7 @@ dependencies = [
  "byteorder",
  "crunchy",
  "lazy_static",
- "rand 0.8.4",
+ "rand 0.8.5",
  "rustc-hex",
 ]
 
@@ -3024,7 +2997,7 @@ dependencies = [
  "indexmap",
  "pin-project",
  "pin-project-lite",
- "rand 0.8.4",
+ "rand 0.8.5",
  "slab",
  "tokio",
  "tokio-stream",

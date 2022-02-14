@@ -4,7 +4,6 @@ use super::{
     sentry_address::SentryAddress,
     sentry_client::*,
 };
-use crate::models::*;
 use async_trait::async_trait;
 use ethereum_interfaces::{sentry as grpc_sentry, types as grpc_types};
 use futures_core::Stream;
@@ -143,7 +142,7 @@ impl SentryClient for SentryClientImpl {
                         .ok_or_else(|| anyhow::format_err!("SentryClient receive_messages stream got an invalid MessageId {}", inbound_message.id))?;
                     let message_id = EthMessageId::try_from(grpc_message_id)?;
                     let grpc_peer_id: Option<grpc_types::H256> = inbound_message.peer_id;
-                    let peer_id: Option<PeerId> = grpc_peer_id.map(H256::from);
+                    let peer_id: Option<PeerId> = grpc_peer_id.map(PeerId::from);
                     let message_bytes: bytes::Bytes = inbound_message.data;
                     let message = message_decoder::decode_rlp_message(message_id, message_bytes.as_ref())?;
                     let message_from_peer = MessageFromPeer {

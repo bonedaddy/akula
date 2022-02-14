@@ -22,7 +22,9 @@ async fn main() -> anyhow::Result<()> {
 
     let chain_config = ChainsConfig::default().get("mainnet")?;
     let coordinator = Coordinator::new(
-        vec![SentryClient::connect("http://localhost:8000").await?],
+        vec![
+            SentryClient::connect("http://localhost:8000").await?,
+        ],
         chain_config,
         0,
     );
