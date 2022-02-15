@@ -3,24 +3,22 @@ use crate::{
     models::{BlockHeader, BlockNumber, H256},
     sentry2::{types::*, Coordinator, SentryCoordinator},
 };
-use futures_util::{FutureExt, StreamExt};
+use futures_util::FutureExt;
 use hashbrown::{HashMap, HashSet};
 use std::{sync::Arc, time::Duration};
-use tracing::info;
+use tokio_stream::StreamExt;
 
 const CHUNK_SIZE: usize = 256;
 const BATCH_SIZE: usize = 98304 * 4;
 const INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct HeaderDownloader {
-    coordinator: Arc<Coordinator>,
-    preverified: HashSet<H256>,
-
-    requests: Vec<HashMap<H256, HeaderRequest>>,
-    pending: Vec<BlockHeader>,
+    pub coordinator: Arc<Coordinator>,
+    pub bad_headers: HashSet<H256>,
+    pub preverified: HashSet<H256>,
+    pub requests: Vec<HashMap<H256, HeaderRequest>>,
+    pub pending: Vec<BlockHeader>,
 }
-
-pub struct Link {}
 
 impl HeaderDownloader {
     pub fn new(coordinator: Arc<Coordinator>) -> Self {
@@ -29,19 +27,20 @@ impl HeaderDownloader {
 
         Self {
             coordinator,
-            requests: chunks,
+            bad_headers: HashSet::new(),
             preverified: HashSet::new(),
+            requests: chunks,
             pending: Vec::new(),
         }
     }
-    #[allow(unreachable_code)]
+
     pub async fn spin(&mut self) -> anyhow::Result<()> {
-        let mut stream = self.coordinator.recv_headers().await?;
+        let mut stream = self.coordinator.recv_headers().await.unwrap();
         let chunks = self.requests.clone().into_iter();
 
-        info!("Starting header downloader");
-        for mut chunk in chunks.clone() {
+        for mut chunk in chunks {
             let mut timer = tokio::time::interval(INTERVAL);
+
             while chunk.len() > 0 {
                 futures_util::select! {
                     msg = stream.next().fuse() => {
@@ -74,13 +73,6 @@ impl HeaderDownloader {
                 }
             }
         }
-
-        Ok(())
-    }
-
-    pub async fn download_unverified(&mut self) -> anyhow::Result<()> {
-        let mut stream = self.coordinator.recv_headers();
-        let mut timer = tokio::time::interval(INTERVAL);
 
         Ok(())
     }
