@@ -11,7 +11,7 @@ use itertools::Itertools;
 use mdbx::EnvironmentKind;
 use rayon::slice::ParallelSliceMut;
 use std::{
-    ops::{ControlFlow, Generator, GeneratorState},
+    ops::{Generator, GeneratorState},
     pin::Pin,
     sync::Arc,
     time::Duration,
@@ -21,17 +21,19 @@ use tracing::info;
 
 use super::CoordinatorStream;
 
-const CHUNK_SIZE: usize = 512;
+const CHUNK_SIZE: usize = 256;
 const BATCH_SIZE: usize = 98304 * 4;
 const INTERVAL: Duration = Duration::from_secs(10);
 
-pub type Headers = Vec<(usize, Vec<BlockHeader>)>;
+pub type Headers = Vec<BlockHeader>;
+
 pub struct HeaderDownloader<'a> {
     pub coordinator: Arc<Coordinator>,
     pub bad_headers: HashSet<H256>,
     pub preverified: HashSet<H256>,
     pub pending: Vec<BlockHeader>,
     pub height: BlockNumber,
+    pub carefully: bool,
 
     // maybe_tip is block number that could be the tip of the cannonical chain
     // but we can't give such guarantee that it is.
@@ -39,29 +41,24 @@ pub struct HeaderDownloader<'a> {
     _phantom: std::marker::PhantomData<&'a ()>,
 }
 
-fn verify_slices(headers: Headers) -> anyhow::Result<()> {
+fn verify_slices(headers: Vec<BlockHeader>) -> anyhow::Result<()> {
     let _ = headers
         .into_iter()
-        .map(|(i, chunk)| {
+        .tuple_windows()
+        .map(|(parent, child)| {
             std::thread::spawn(move || {
                 (
-                    i,
-                    chunk[..]
-                        .iter()
-                        .tuple_windows()
-                        .map(|(parent, child)| {
-                            child.number == parent.number + 1
-                                && child.parent_hash == parent.hash()
-                                && child.timestamp >= parent.timestamp
-                        })
-                        .any(|valid| !valid),
+                    child.number.0,
+                    child.number == parent.number + 1
+                        && child.parent_hash == parent.hash()
+                        && child.timestamp >= parent.timestamp,
                 )
             })
         })
         .filter_map::<_, _>(|task| -> Option<usize> {
             match task.join() {
                 // FIXME: Rerequest invalid headers.
-                Ok((_, false)) => None,
+                Ok((_, true)) => None,
                 _ => unreachable!(),
             }
         })
@@ -115,14 +112,15 @@ impl Generator for RequestGenerator {
 }
 
 impl<'a> HeaderDownloader<'a> {
-    pub fn new(coordinator: Arc<Coordinator>) -> Self {
+    pub fn new(coordinator: Arc<Coordinator>, height: BlockNumber) -> Self {
         Self {
             coordinator,
-            height: BlockNumber(0),
+            height,
             bad_headers: HashSet::new(),
             preverified: HashSet::new(),
             pending: Vec::new(),
             maybe_tip: None,
+            carefully: false,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -144,21 +142,18 @@ impl<'a> HeaderDownloader<'a> {
 
         loop {
             let txn = db.begin_mutable()?;
-            for header in self
-                .request_more(&mut stream)
-                .await?
-                .into_iter()
-                .flat_map(|(_, h)| h)
-                .collect::<Vec<_>>()
-                .into_iter()
-            {
-                let number = header.number.clone();
+            let headers = self.request_more(&mut stream).await?;
+            let new_head = headers.len() as u64;
+            headers.into_iter().for_each(|header| {
+                let number = header.number;
                 let hash = header.hash();
-                txn.set(tables::Header, (header.number, hash), header)?;
-                txn.set(tables::HeaderNumber, hash, number)?;
-                txn.set(tables::CanonicalHeader, number, hash)?;
-            }
+                txn.set(tables::Header, (header.number, hash), header)
+                    .unwrap();
+                txn.set(tables::HeaderNumber, hash, number).unwrap();
+                txn.set(tables::CanonicalHeader, number, hash).unwrap();
+            });
             txn.commit()?;
+            self.height.0 += new_head;
         }
         Ok(())
     }
@@ -168,25 +163,24 @@ impl<'a> HeaderDownloader<'a> {
         stream: &mut CoordinatorStream,
     ) -> anyhow::Result<Headers> {
         let mut tick = tokio::time::interval(INTERVAL);
-        let mut headers: Headers = Vec::new();
+        let mut headers = Vec::new();
         let mut gen = RequestGenerator::new(
             self.height,
-            self.maybe_tip
-                .clone()
-                .map_or(None, |tip| Some(tip.block.header.number)),
+            self.maybe_tip.clone().map(|tip| tip.block.header.number),
         );
-        let mut pending_requests = HashMap::new();
-        (0..512).for_each(|_| {
-            match ControlFlow::Continue(unsafe { Pin::new_unchecked(&mut gen).resume(()) }) {
-                ControlFlow::Continue(GeneratorState::Yielded(v)) => {
-                    pending_requests.insert(v.number, v);
-                }
-                ControlFlow::Break(GeneratorState::Complete::<HeaderRequest, ()>(())) => {
-                    return;
-                }
-                _ => unreachable!(),
-            }
-        });
+        let mut pending_requests = (0..CHUNK_SIZE)
+            .filter_map(
+                |_| match unsafe { Pin::new_unchecked(&mut gen).resume(()) } {
+                    GeneratorState::Yielded(v) => {
+                        if v.limit < 192 {
+                            self.carefully = true;
+                        };
+                        Some((v.number, v))
+                    }
+                    _ => None,
+                },
+            )
+            .collect::<HashMap<_, _>>();
 
         while !pending_requests.is_empty() {
             futures_util::select! {
@@ -204,28 +198,44 @@ impl<'a> HeaderDownloader<'a> {
                         .collect::<FuturesUnordered<_>>();
                 }
                 msg = stream.next().fuse() => {
-                    match msg.unwrap().msg {
+                    let value = match msg.unwrap().msg {
                         Message::BlockHeaders(value) => {
-                            if value.headers.len() != 192
+                            // FIXME: Length one is an edge case, that should be handled properly.
+                            if value.headers.len() <= 1
                                 || !(pending_requests.contains_key(&value.headers[0].number))
-                                || (value.headers[0].number.0 + 191) != value.headers[191].number.0 {
+                                || value.headers.len() != pending_requests.get(&value.headers[0].number).unwrap().limit as usize
+                                || (value.headers[0].number.0 + (pending_requests.get(&value.headers[0].number).unwrap().limit-1) as u64)
+                                    != value.headers[value.headers.len() - 1].number.0 {
                                 continue;
                             }
-                            let first = value.headers[0].number;
-                            pending_requests.remove(&first);
-                            headers.push((first.0 as usize, value.headers));
+                            value
                         }
                         Message::NewBlock(value) => {
                             self.maybe_tip = Some(value);
+                            continue
                         }
                         _ => unreachable!(),
+                    };
+
+                    if self.carefully {
+                        match  verify_slices(value.headers.clone()) {
+                            Ok(_) => {
+                                pending_requests.remove(&value.headers[0].number);
+                                headers.push((value.headers[0].number.0 as usize, value.headers));
+                            }
+                            _ => continue,
+                        };
+                    } else {
+                        pending_requests.remove(&value.headers[0].number);
+                        headers.push((value.headers[0].number.0 as usize, value.headers));
                     }
                 }
+
             }
         }
         headers.par_sort_unstable_by_key(|(i, _)| *i);
+        let headers = headers.into_iter().flat_map(|(_, h)| h).collect::<Vec<_>>();
         verify_slices(headers.clone())?;
-        self.height.0 += headers.len() as u64 * 192;
         Ok(headers)
     }
 }

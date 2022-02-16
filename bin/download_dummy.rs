@@ -1,5 +1,6 @@
 use akula::{
     binutil::AkulaDataDir,
+    models::BlockNumber,
     sentry::chain_config::ChainsConfig,
     sentry2::{header_downloader::HeaderDownloader, Coordinator, SentryClient},
 };
@@ -59,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
         chain_config,
         0,
     ));
-    let mut hd = HeaderDownloader::new(coordinator);
+    let mut hd = HeaderDownloader::new(coordinator, BlockNumber(0));
     hd.runtime(&db).await?;
 
     Ok(())
