@@ -1373,7 +1373,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee"
 version = "0.9.0"
-source = "git+https://github.com/paritytech/jsonrpsee#4d67b35668811ba7dcafdbe01f84e7344de1a9e6"
+source = "git+https://github.com/paritytech/jsonrpsee#b2553e0e6b8b435d1fb335d7d86043862a9f74a0"
 dependencies = [
  "jsonrpsee-core",
  "jsonrpsee-http-server",
@@ -1385,7 +1385,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-core"
 version = "0.9.0"
-source = "git+https://github.com/paritytech/jsonrpsee#4d67b35668811ba7dcafdbe01f84e7344de1a9e6"
+source = "git+https://github.com/paritytech/jsonrpsee#b2553e0e6b8b435d1fb335d7d86043862a9f74a0"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -1410,7 +1410,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-http-server"
 version = "0.9.0"
-source = "git+https://github.com/paritytech/jsonrpsee#4d67b35668811ba7dcafdbe01f84e7344de1a9e6"
+source = "git+https://github.com/paritytech/jsonrpsee#b2553e0e6b8b435d1fb335d7d86043862a9f74a0"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -1429,7 +1429,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-proc-macros"
 version = "0.9.0"
-source = "git+https://github.com/paritytech/jsonrpsee#4d67b35668811ba7dcafdbe01f84e7344de1a9e6"
+source = "git+https://github.com/paritytech/jsonrpsee#b2553e0e6b8b435d1fb335d7d86043862a9f74a0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1440,7 +1440,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-types"
 version = "0.9.0"
-source = "git+https://github.com/paritytech/jsonrpsee#4d67b35668811ba7dcafdbe01f84e7344de1a9e6"
+source = "git+https://github.com/paritytech/jsonrpsee#b2553e0e6b8b435d1fb335d7d86043862a9f74a0"
 dependencies = [
  "anyhow",
  "beef",
@@ -1453,7 +1453,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-ws-server"
 version = "0.9.0"
-source = "git+https://github.com/paritytech/jsonrpsee#4d67b35668811ba7dcafdbe01f84e7344de1a9e6"
+source = "git+https://github.com/paritytech/jsonrpsee#b2553e0e6b8b435d1fb335d7d86043862a9f74a0"
 dependencies = [
  "async-channel 1.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-channel",
