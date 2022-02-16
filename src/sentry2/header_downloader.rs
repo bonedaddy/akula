@@ -97,7 +97,6 @@ impl Generator for RequestGenerator {
             if this.height + 192 > this.maybe_tip {
                 this.height = this.maybe_tip;
                 GeneratorState::Yielded(HeaderRequest {
-                    hash: None,
                     number: this.height,
                     limit: this.maybe_tip.0 - this.height.0,
                     ..Default::default()
@@ -105,7 +104,6 @@ impl Generator for RequestGenerator {
             } else {
                 this.height.0 += 192;
                 GeneratorState::Yielded(HeaderRequest {
-                    hash: None,
                     number: this.height,
                     ..Default::default()
                 })
@@ -160,6 +158,7 @@ impl<'a> HeaderDownloader<'a> {
                 txn.set(tables::HeaderNumber, hash, number)?;
                 txn.set(tables::CanonicalHeader, number, hash)?;
             }
+            txn.commit()?;
         }
         Ok(())
     }
@@ -192,7 +191,7 @@ impl<'a> HeaderDownloader<'a> {
         while !pending_requests.is_empty() {
             futures_util::select! {
                 _ = tick.tick().fuse() => {
-                    info!("{:#?}", self.height.0 + (CHUNK_SIZE - pending_requests.len())*192 as u64);
+                    info!("{:#?}", self.height.0 + 192 * ((CHUNK_SIZE - pending_requests.len()) as u64));
                     let _ = pending_requests
                         .values()
                         .cloned()
