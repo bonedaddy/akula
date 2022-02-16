@@ -17,7 +17,11 @@ use derive_more::*;
 use hex_literal::hex;
 use rlp::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
-use std::{iter::Step, mem::size_of, ops::Add};
+use std::{
+    iter::Step,
+    mem::size_of,
+    ops::{Add, Sub},
+};
 
 pub use ethereum_types::{Address, Bloom, H128, H160, H256, H512, H64, U512, U64};
 pub use ethnum::*;
@@ -94,6 +98,30 @@ macro_rules! u64_wrapper {
 
             fn add(self, rhs: u64) -> Self::Output {
                 Self(self.0 + rhs)
+            }
+        }
+
+        impl Sub<u64> for $ty {
+            type Output = Self;
+
+            fn sub(self, rhs: u64) -> Self::Output {
+                Self(self.0 - rhs)
+            }
+        }
+
+        impl Sub<$ty> for $ty {
+            type Output = Self;
+
+            fn sub(self, rhs: $ty) -> Self::Output {
+                Self(self.0 - rhs.0)
+            }
+        }
+
+        impl Add<$ty> for $ty {
+            type Output = Self;
+
+            fn add(self, rhs: $ty) -> Self::Output {
+                Self(self.0 + rhs.0)
             }
         }
 

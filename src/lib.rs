@@ -13,7 +13,8 @@
     const_try,
     inline_const,
     const_option,
-    adt_const_params
+    adt_const_params,
+    let_chains
 )]
 #![recursion_limit = "256"]
 #![allow(

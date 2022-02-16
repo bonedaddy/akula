@@ -79,7 +79,7 @@ impl SentryCoordinator for Coordinator {
             let mut sentry = sentry.clone();
             let status_data = status_data.clone();
             futs.push(async move {
-                sentry.hand_shake(tonic::Request::new(())).await.unwrap();
+                let _ = sentry.hand_shake(tonic::Request::new(())).await;
                 let _ = sentry.set_status(status_data).await;
             });
         });
@@ -106,6 +106,8 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
     async fn recv(&self, msg_ids: Vec<i32>) -> anyhow::Result<CoordinatorStream> {
+        self.set_status().await?;
+
         Ok(futures_util::stream::select_all(
             futures_util::future::join_all(
                 self.sentries
@@ -295,24 +297,16 @@ impl tokio_stream::Stream for SingleSentryStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         let this = self.get_mut();
         match Pin::new(&mut this.0).poll_next(cx) {
-            std::task::Poll::Ready(value) => {
-                if let Some(value) = value {
-                    let value = value.unwrap();
-                    let msg_id = match MessageId::from_i32(value.id) {
-                        Ok(id) => Some(id),
-                        _ => None,
-                    };
-                    if msg_id.is_some() {
-                        let msg = decode_rlp_message(msg_id.unwrap(), &value.data).unwrap();
-                        return std::task::Poll::Ready(Some(InboundMessage {
-                            peer_id: value.peer_id.unwrap().into(),
-                            msg,
-                        }));
-                    }
-                }
-                return std::task::Poll::Pending;
+            std::task::Poll::Ready(Some(Ok(value))) => {
+                if let Ok(id) = MessageId::from_i32(value.id) {
+                    return std::task::Poll::Ready(Some(InboundMessage {
+                        msg: decode_rlp_message(id, &value.data).unwrap(),
+                        peer_id: value.peer_id.unwrap_or_default().into(),
+                    }));
+                };
+                std::task::Poll::Pending
             }
-            _ => return std::task::Poll::Pending,
+            _ => std::task::Poll::Pending,
         }
     }
 }
