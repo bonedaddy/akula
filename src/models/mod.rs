@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     iter::Step,
     mem::size_of,
-    ops::{Add, Sub},
+    ops::{Add, AddAssign, Div, Mul, Sub, SubAssign},
 };
 
 pub use ethereum_types::{Address, Bloom, H128, H160, H256, H512, H64, U512, U64};
@@ -122,6 +122,62 @@ macro_rules! u64_wrapper {
 
             fn add(self, rhs: $ty) -> Self::Output {
                 Self(self.0 + rhs.0)
+            }
+        }
+
+        impl Mul<u64> for $ty {
+            type Output = Self;
+
+            fn mul(self, rhs: u64) -> Self::Output {
+                Self(self.0 * rhs)
+            }
+        }
+
+        impl Div<u64> for $ty {
+            type Output = Self;
+
+            fn div(self, rhs: u64) -> Self::Output {
+                Self(self.0 / rhs)
+            }
+        }
+
+        impl Mul<$ty> for $ty {
+            type Output = Self;
+
+            fn mul(self, rhs: $ty) -> Self::Output {
+                Self(self.0 * rhs.0)
+            }
+        }
+
+        impl Div<$ty> for $ty {
+            type Output = Self;
+
+            fn div(self, rhs: $ty) -> Self::Output {
+                Self(self.0 / rhs.0)
+            }
+        }
+
+        impl AddAssign<u64> for $ty {
+            fn add_assign(&mut self, rhs: u64) {
+                self.0 += rhs
+            }
+        }
+
+        impl SubAssign<u64> for $ty {
+            fn sub_assign(&mut self, rhs: u64) {
+                self.0 -= rhs
+            }
+        }
+
+        impl AddAssign<$ty> for $ty {
+            fn add_assign(&mut self, rhs: $ty) {
+                self.0 += rhs.0
+            }
+        }
+
+        impl SubAssign<$ty> for $ty {
+            fn sub_assign(&mut self, rhs: $ty) {
+                self.0 -= rhs.0
             }
         }
 
