@@ -4,12 +4,6 @@ use crate::{
 };
 use rlp_derive::*;
 
-impl From<BlockNumber> for u64 {
-    fn from(block_number: BlockNumber) -> Self {
-        block_number.0
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct HeaderRequest {
     pub start: BlockId,
@@ -19,7 +13,7 @@ pub struct HeaderRequest {
 }
 
 impl HeaderRequest {
-    pub fn new(start: BlockId, limit: u64, skip: u64, reverse: bool) -> Self {
+    pub const fn new(start: BlockId, limit: u64, skip: u64, reverse: bool) -> Self {
         Self {
             start,
             limit,
@@ -29,10 +23,10 @@ impl HeaderRequest {
     }
 }
 
-impl Default for HeaderRequest {
+impl const Default for HeaderRequest {
     fn default() -> Self {
         HeaderRequest {
-            start: BlockId::Number(0.into()),
+            start: BlockId::Number(BlockNumber(0)),
             limit: 192,
             skip: 0,
             reverse: false,
@@ -46,7 +40,7 @@ pub struct Announce {
 }
 
 impl Announce {
-    pub fn new(hash: H256, number: BlockNumber) -> Self {
+    pub const fn new(hash: H256, number: BlockNumber) -> Self {
         Self { hash, number }
     }
 }
@@ -58,7 +52,7 @@ pub struct GetBlockHeaders {
 }
 
 impl GetBlockHeaders {
-    pub fn new(request_id: u64, params: GetBlockHeadersParams) -> Self {
+    pub const fn new(request_id: u64, params: GetBlockHeadersParams) -> Self {
         Self { request_id, params }
     }
 }
@@ -72,7 +66,7 @@ pub struct GetBlockHeadersParams {
 }
 
 impl GetBlockHeadersParams {
-    pub fn new(start: BlockId, limit: u64, skip: u64, reverse: u8) -> Self {
+    pub const fn new(start: BlockId, limit: u64, skip: u64, reverse: u8) -> Self {
         Self {
             start,
             limit,
@@ -89,7 +83,7 @@ pub struct BlockHeaders {
 }
 
 impl BlockHeaders {
-    pub fn new(request_id: u64, headers: Vec<BlockHeader>) -> Self {
+    pub const fn new(request_id: u64, headers: Vec<BlockHeader>) -> Self {
         Self {
             request_id,
             headers,
