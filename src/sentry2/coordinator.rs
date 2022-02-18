@@ -359,10 +359,10 @@ impl tokio_stream::Stream for SingleSentryStream {
                     Ok(v) => v,
                     _ => return std::task::Poll::Pending,
                 };
-                return std::task::Poll::Ready(Some(InboundMessage {
+                std::task::Poll::Ready(Some(InboundMessage {
                     msg,
                     peer_id: value.peer_id.unwrap_or_default().into(),
-                }));
+                }))
             }
             _ => std::task::Poll::Pending,
         }

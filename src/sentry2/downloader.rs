@@ -1,6 +1,10 @@
 #![allow(unreachable_code)]
 use crate::{
     downloader::PreverifiedHashesConfig,
+    kv::{
+        mdbx::{MdbxEnvironment, MdbxTransaction},
+        tables::Header,
+    },
     models::{BlockNumber, H256},
     sentry::chain_config::ChainConfig,
     sentry2::{
@@ -11,8 +15,9 @@ use crate::{
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::{HashMap, HashSet};
 use hashlink::LinkedHashSet;
+use mdbx::{EnvironmentKind, RW};
 use rayon::{iter::ParallelIterator, slice::ParallelSlice};
-use std::{marker::PhantomData, sync::Arc, time::Duration};
+use std::{collections::VecDeque, marker::PhantomData, sync::Arc, time::Duration};
 use tracing::info;
 
 const BATCH_SIZE: usize = 89856;
@@ -32,6 +37,8 @@ pub struct HeaderDownloader<'a> {
     pub preverified: Vec<H256>,
     /// The hash known to belong to the canonical chain(with exception for genesis and preverified hashes), defaults to 0 because we haven't yet discovered canonical chain.
     pub canonical_marker: H256,
+    /// prepared requests for preverified hashes.
+    pub prepared_requests: VecDeque<Vec<H256>>,
     pub found_tip: bool,
 
     _phantom: PhantomData<&'a ()>,
@@ -45,7 +52,17 @@ impl<'a> HeaderDownloader<'a> {
     ) -> Self {
         let preverified = PreverifiedHashesConfig::new(&chain_config.chain_name())
             .map_or(vec![], |config| config.hashes);
-        let sentry = Arc::new(Coordinator::new(conn, chain_config.clone(), 0));
+        let sentry = Arc::new(Coordinator::new(conn, chain_config, 0));
+        let prepared_requests =
+            if height.0 < preverified.len() as u64 * 192 && !preverified.is_empty() {
+                preverified
+                    .par_chunks(72)
+                    .map(|chunk| chunk.to_vec())
+                    .collect::<VecDeque<_>>()
+            } else {
+                VecDeque::new()
+            };
+
         Self {
             sentry,
             height,
@@ -53,86 +70,22 @@ impl<'a> HeaderDownloader<'a> {
             childs_table: HashMap::new(),
             blocks_table: HashMap::new(),
             preverified,
+            prepared_requests,
             canonical_marker: H256::default(),
             found_tip: false,
             _phantom: PhantomData,
         }
     }
 
-    pub async fn download_preverified_hashes(&'_ mut self) -> anyhow::Result<()> {
-        let mut stream = self.sentry.recv().await?;
-        let hashes = self
-            .preverified
-            .par_chunks(72)
-            .map(|chunk| chunk.into_iter().map(|v| *v).collect::<Vec<_>>())
-            .collect::<Vec<_>>();
-        let progress = hashes.len() * 72 * 192;
-        let mut ticker = tokio::time::interval(Duration::from_secs(15));
-        let mut pending = Vec::new();
-
-        for skeleton in hashes.into_iter() {
-            let mut left = skeleton.iter().map(|v| *v).collect::<HashSet<_>>();
-
-            while !left.is_empty() {
-                select! {
-                    _ = ticker.tick().fuse() => {
-                        info!("Downloading preverified hashes, {:?} of {:?} {:#?}", pending.len(), progress, skeleton);
-                        let _ = skeleton.iter().step_by(3).filter_map(|hash| {
-                            if left.contains(hash) {
-                                let req = HeaderRequest {
-                                    start: (*hash).into(),
-                                    limit: if left.len() > 3 { 3 } else { left.len() } as u64*192,
-                                    ..Default::default()
-                                };
-                                let sentry = self.sentry.clone();
-                                Some(tokio::spawn(async move {
-                                    let _ = sentry.send_header_request(req).await;
-                                }))
-                            } else {
-                                None
-                            }
-                        }).collect::<FuturesUnordered<_>>().map(|f| f.unwrap());
-                    }
-                    msg = stream.next().fuse() => {
-                        if msg.is_none() {
-                            continue;
-                        }
-
-                        match msg.unwrap().msg {
-                            Message::BlockHeaders(value) => {
-                                info!("{:#?}", value.headers.len());
-                                if value.headers.len() % 192 == 0 && !value.headers.is_empty() {
-                                    let numerator = value.headers.len() / 192;
-
-                                    let remove = (0..numerator).filter_map(|j| {
-                                        let hash = value.headers[j*192].hash();
-                                        if left.contains(&hash) {
-                                            Some(hash)
-                                        } else {
-                                            None
-                                        }
-                                    }).collect::<Vec<_>>();
-                                    if remove.len() == numerator {
-                                        remove.into_iter().for_each(|hash| { if !left.remove(&hash) { unreachable!() }});
-                                        pending.extend(value.headers);
-                                    }
-                                }
-                            },
-                           _ => continue,
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn runtime(&'_ mut self) -> anyhow::Result<()> {
+    /// Runtime of the downloader.
+    pub async fn runtime<E: EnvironmentKind>(
+        &'_ mut self,
+        db: &'_ MdbxEnvironment<E>,
+    ) -> anyhow::Result<()> {
         let mut stream = self.sentry.recv().await?;
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
-        if self.height.0 < self.preverified.len() as u64 * 192 {
-            self.download_preverified_hashes().await?;
-        }
+
+        self.step(db.begin_mutable()?).await?;
 
         loop {
             select! {
@@ -211,7 +164,99 @@ impl<'a> HeaderDownloader<'a> {
         Ok(())
     }
 
-    async fn try_find_tip(&'_ mut self) -> anyhow::Result<bool> {
+    /// Runs next step on the finite time.
+    pub async fn step<E: EnvironmentKind>(
+        &'_ mut self,
+        _: MdbxTransaction<'_, RW, E>,
+    ) -> anyhow::Result<()> {
+        while self.height.0 < self.preverified.len() as u64 * 192 {
+            //self.download_preverified_hashes().await?;
+        }
+        Ok(())
+    }
+
+    /// Flushes step progress.
+    pub async fn flush<E: EnvironmentKind>(
+        &'_ mut self,
+        _: Vec<Header>,
+        _: &mut MdbxTransaction<'_, RW, E>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Downloads preverified headers in a finite number of steps.
+    pub async fn download_preverified_hashes<E: EnvironmentKind>(
+        &'_ mut self,
+        _: MdbxTransaction<'_, RW, E>,
+    ) -> anyhow::Result<()> {
+        let mut stream = self.sentry.recv().await?;
+        let progress = self.prepared_requests.len() * 72 * 192;
+        let mut ticker = tokio::time::interval(Duration::from_secs(15));
+        let mut pending = Vec::new();
+
+        while let Some(skeleton) = self.prepared_requests.pop_front() {
+            // FIXME: Reduce alloc.
+            let mut left = skeleton.iter().copied().collect::<HashSet<_>>();
+
+            while !left.is_empty() {
+                select! {
+                    _ = ticker.tick().fuse() => {
+                        info!("Downloading preverified hashes, {:?} of {:?} {:#?}", pending.len(), progress, skeleton);
+                        let _ = skeleton.iter().step_by(3).filter_map(|hash| {
+                            if left.contains(hash) {
+                                let req = HeaderRequest {
+                                    start: (*hash).into(),
+                                    limit: if left.len() > 3 { 3 } else { left.len() } as u64*192,
+                                    ..Default::default()
+                                };
+                                let sentry = self.sentry.clone();
+                                Some(tokio::spawn(async move {
+                                    let _ = sentry.send_header_request(req).await;
+                                }))
+                            } else {
+                                None
+                            }
+                        }).collect::<FuturesUnordered<_>>().map(|f| f.unwrap());
+                    }
+                    msg = stream.next().fuse() => {
+                        if msg.is_none() {
+                            continue;
+                        }
+
+                        match msg.unwrap().msg {
+                            Message::BlockHeaders(value) => {
+                                info!("{:#?}", value.headers.len());
+                                if value.headers.len() % 192 == 0 && !value.headers.is_empty() {
+                                    let numerator = value.headers.len() / 192;
+
+                                    let remove = (0..numerator).filter_map(|j| {
+                                        let hash = value.headers[j*192].hash();
+                                        if left.contains(&hash) {
+                                            Some(hash)
+                                        } else {
+                                            None
+                                        }
+                                    }).collect::<Vec<_>>();
+                                    if remove.len() == numerator {
+                                        remove.into_iter().for_each(|hash| { if !left.remove(&hash) { unreachable!() }});
+                                        pending.extend(value.headers);
+                                    }
+                                }
+                            },
+                           _ => continue,
+                        }
+                    }
+                }
+            }
+
+            if pending.len() >= BATCH_SIZE {}
+        }
+
+        Ok(())
+    }
+
+    /// Finds chain tip if it's possible at the given moment.
+    pub async fn try_find_tip(&'_ mut self) -> anyhow::Result<bool> {
         let mut canonical = Vec::new();
         self.childs_table
             .keys()
@@ -244,10 +289,9 @@ impl<'a> HeaderDownloader<'a> {
 
             return Ok(true);
         } else if !canonical.is_empty() {
-            let hash = canonical.last().unwrap().clone();
             self.sentry
                 .send_header_request(HeaderRequest {
-                    start: hash.into(),
+                    start: (*canonical.last().unwrap()).into(),
                     limit: 1,
                     skip: 1,
                     ..Default::default()
@@ -258,7 +302,10 @@ impl<'a> HeaderDownloader<'a> {
         Ok(false)
     }
 
-    async fn prepare_requests(&'_ mut self, mut stream: CoordinatorStream) -> anyhow::Result<()> {
+    pub async fn prepare_requests(
+        &'_ mut self,
+        mut stream: CoordinatorStream,
+    ) -> anyhow::Result<()> {
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
         let (height, td) = self.blocks_table.get(&self.canonical_marker).unwrap();
         if td.is_some() {
@@ -316,6 +363,5 @@ mod tests {
             .await
             .unwrap();
         let mut hd = HeaderDownloader::new(sentry, chain_config, BlockNumber(0));
-        hd.runtime().await.unwrap();
     }
 }
