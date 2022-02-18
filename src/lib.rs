@@ -14,7 +14,8 @@
     inline_const,
     const_option,
     adt_const_params,
-    let_chains
+    let_chains,
+    associated_type_bounds
 )]
 #![recursion_limit = "256"]
 #![allow(

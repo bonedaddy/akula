@@ -7,12 +7,26 @@ use async_trait::async_trait;
 use auto_impl::auto_impl;
 use ethereum_interfaces::sentry as grpc_sentry;
 use futures_core::Stream;
-use futures_util::{stream::FuturesUnordered, FutureExt, StreamExt};
+use futures_util::{FutureExt, StreamExt};
 use std::{
     pin::Pin,
     sync::{atomic::AtomicU64, Arc},
 };
 use tokio::sync::broadcast;
+
+pub struct SentryPool(Vec<SentryClient>);
+
+impl From<SentryClient> for SentryPool {
+    fn from(sentry: SentryClient) -> Self {
+        Self(vec![sentry])
+    }
+}
+
+impl From<Vec<SentryClient>> for SentryPool {
+    fn from(sentry: Vec<SentryClient>) -> Self {
+        Self(sentry)
+    }
+}
 
 pub type SentryClient = grpc_sentry::sentry_client::SentryClient<tonic::transport::Channel>;
 
@@ -28,7 +42,11 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
-    pub fn new(sentries: Vec<SentryClient>, chain_config: ChainConfig, block_height: u64) -> Self {
+    pub fn new<T: Into<SentryPool>>(
+        sentry: T,
+        chain_config: ChainConfig,
+        block_height: u64,
+    ) -> Self {
         let genesis_hash = chain_config.genesis_block_hash();
         let network_id = chain_config.network_id().0;
         let hard_forks = chain_config
@@ -46,7 +64,7 @@ impl Coordinator {
             .into();
         let status = Status::new(block_height, genesis_hash, total_difficulty);
         Self {
-            sentries,
+            sentries: sentry.into().0,
             status: Arc::new(AtomicStatus::new(status)),
             genesis_hash,
             network_id,

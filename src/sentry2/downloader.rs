@@ -1,14 +1,19 @@
 #![allow(unreachable_code)]
 use crate::{
+    downloader::PreverifiedHashesConfig,
+    kv::mdbx::MdbxEnvironment,
     models::{BlockNumber, H256},
+    sentry::chain_config::ChainConfig,
     sentry2::{
-        types::{HeaderRequest, Message, MessageId},
-        Coordinator, CoordinatorStream, SentryCoordinator,
+        types::{HeaderRequest, Message},
+        Coordinator, CoordinatorStream, SentryCoordinator, SentryPool,
     },
 };
 use futures_util::{select, FutureExt, StreamExt};
 use hashbrown::{HashMap, HashSet};
 use hashlink::LinkedHashSet;
+use mdbx::EnvironmentKind;
+use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 use tracing::info;
 
@@ -32,27 +37,57 @@ pub struct HeaderDownloader<'a> {
 }
 
 impl<'a> HeaderDownloader<'a> {
-    pub fn new(sentry: Arc<Coordinator>, height: BlockNumber) -> Self {
+    pub fn new<T: Into<SentryPool>>(
+        conn: T,
+        chain_config: ChainConfig,
+        height: BlockNumber,
+    ) -> Self {
+        let preverified = PreverifiedHashesConfig::new(&chain_config.chain_name())
+            .map_or(vec![], |config| config.hashes);
+        let sentry = Arc::new(Coordinator::new(conn, chain_config.clone(), 0));
         Self {
             sentry,
             height,
             seen_announces: LinkedHashSet::new(),
             childs_table: HashMap::new(),
             blocks_table: HashMap::new(),
-            preverified: Vec::new(),
+            preverified,
             canonical_marker: H256::default(),
             _phantom: PhantomData,
         }
     }
 
-    pub async fn runtime(
-        &'_ mut self, // pub async fn runtime<E: EnvironmentKind>(
-                      //     &'_ mut self,
-                      //     db: &'_ MdbxEnvironment<E>
+    pub async fn download_preverified_hashes<E: EnvironmentKind>(
+        &'_ mut self,
+        db: &'_ MdbxEnvironment<E>,
     ) -> anyhow::Result<()> {
-        //let _ = db.begin_mutable()?;
         let mut stream = self.sentry.recv().await?;
-        let mut ticker = tokio::time::interval(Duration::from_secs(60));
+        let skeletons = self
+            .preverified
+            .par_windows(8)
+            .map(|window| window.into_iter().map(|hash| *hash).collect::<HashSet<_>>())
+            .collect::<Vec<_>>();
+
+        for mut skeleton in skeletons {
+            loop {
+                //select! {}
+            }
+        }
+
+        let mut ticker = tokio::time::interval(Duration::from_secs(15));
+
+        Ok(())
+    }
+
+    pub async fn runtime<E: EnvironmentKind>(
+        &'_ mut self,
+        db: &'_ MdbxEnvironment<E>,
+    ) -> anyhow::Result<()> {
+        let mut stream = self.sentry.recv().await?;
+        let mut ticker = tokio::time::interval(Duration::from_secs(15));
+        if self.height.0 < self.preverified.len() as u64 * 192 {
+            // download preverified hashes
+        }
 
         loop {
             select! {
@@ -61,24 +96,21 @@ impl<'a> HeaderDownloader<'a> {
                     info!("Ping sent {:#?}", self.childs_table);
 
                     let mut canonical = Vec::new();
-                    self.childs_table.into_iter().for_each(|(parent, childs)| {
+                    self.childs_table.keys().into_iter().cloned().for_each(|mut parent| {
                         let mut chain = vec![parent];
-                        if childs.len() > 1 {
-                            for c in childs.into_iter() {
-                                if self.childs_table.get(&c).unwrap().len() == 1 {
-                                    chain.push(c);
+                        while let Some(childrens) = self.childs_table.get(&parent) {
+                            if childrens.len() == 1 {
+                                parent = *childrens.iter().next().unwrap();
+                                chain.push(parent);
+                            } else {
+                                for child in childrens {
+                                    if self.childs_table.get(child).unwrap().len() == 1 {
+                                        parent = *child;
+                                        chain.push(parent);
+                                        break;
+                                    }
                                 }
                             }
-                        } else {
-                             chain.push(childs.into_iter().next().unwrap())
-                        }
-                        let mut hash = *chain.last().unwrap();
-                        while let Some(child) = self.childs_table.get(&hash) {
-                            if child.len() > 1 {
-                                return;
-                            }
-                            chain.push(*child.into_iter().next().unwrap());
-                            hash = *child;
                         }
                         if chain.len() > canonical.len() {
                             canonical = chain;
@@ -213,26 +245,20 @@ impl<'a> HeaderDownloader<'a> {
     }
 }
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
+    use crate::{sentry::chain_config::ChainsConfig, sentry2::SentryClient};
     use tracing::Level;
 
-    use crate::{sentry::chain_config::ChainsConfig, sentry2::SentryClient};
-
-    #[allow(unused_imports)]
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
     async fn it_works() {
-        // tracing_subscriber::fmt()
-        //     .with_max_level(Level::DEBUG)
-        //     .init();
+        //     tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
-        // let chain_config = ChainsConfig::default().get("mainnet").unwrap();
-        // let sentry = SentryClient::connect("http://localhost:8000")
-        //     .await
-        //     .unwrap();
-
-        // let mut coordinator = Arc::new(Coordinator::new(vec![sentry], chain_config, 0));
-        // let mut hd = HeaderDownloader::new(coordinator, BlockNumber(0));
-        // hd.runtime().await;
+        //     let chain_config = ChainsConfig::default().get("mainnet").unwrap();
+        //     let sentry = SentryClient::connect("http://localhost:8000")
+        //         .await
+        //         .unwrap();
+        // }
     }
 }
