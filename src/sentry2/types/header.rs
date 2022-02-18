@@ -12,24 +12,16 @@ impl From<BlockNumber> for u64 {
 
 #[derive(Debug, Clone)]
 pub struct HeaderRequest {
-    pub hash: Option<H256>,
-    pub number: BlockNumber,
+    pub start: BlockId,
     pub limit: u64,
     pub skip: u64,
     pub reverse: bool,
 }
 
 impl HeaderRequest {
-    pub fn new(
-        hash: Option<H256>,
-        number: BlockNumber,
-        limit: u64,
-        skip: u64,
-        reverse: bool,
-    ) -> Self {
+    pub fn new(start: BlockId, limit: u64, skip: u64, reverse: bool) -> Self {
         Self {
-            hash,
-            number,
+            start,
             limit,
             skip,
             reverse,
@@ -40,8 +32,7 @@ impl HeaderRequest {
 impl Default for HeaderRequest {
     fn default() -> Self {
         HeaderRequest {
-            hash: Default::default(),
-            number: Default::default(),
+            start: BlockId::Number(0.into()),
             limit: 192,
             skip: 0,
             reverse: false,

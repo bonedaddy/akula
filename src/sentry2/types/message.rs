@@ -1,7 +1,7 @@
 use super::{header::BlockHeaders, HeaderRequest, PeerId};
 use crate::{
     models::H256,
-    sentry2::types::{BlockId, GetBlockHeaders, GetBlockHeadersParams, NewBlock, NewBlockHashes},
+    sentry2::types::{GetBlockHeaders, GetBlockHeadersParams, NewBlock, NewBlockHashes},
 };
 use ethereum_interfaces::sentry as grpc_sentry;
 use rlp_derive::{RlpDecodableWrapper, RlpEncodableWrapper};
@@ -111,11 +111,7 @@ impl From<HeaderRequest> for Message {
         Message::GetBlockHeaders(GetBlockHeaders {
             request_id: fastrand::u32(..) as u64,
             params: GetBlockHeadersParams {
-                start: if req.hash.is_some() {
-                    BlockId::Hash(req.hash.unwrap())
-                } else {
-                    BlockId::Number(req.number)
-                },
+                start: req.start,
                 limit: req.limit,
                 skip: req.skip,
                 reverse: if req.reverse { 1 } else { 0 },

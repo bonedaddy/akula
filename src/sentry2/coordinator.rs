@@ -228,15 +228,12 @@ impl SentryCoordinator for Coordinator {
     }
 
     async fn ping(&self) -> anyhow::Result<()> {
-        let number = BlockNumber(
-            self.ping_counter
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        );
-
         let _ = self
             .send_header_request(HeaderRequest {
-                hash: None,
-                number,
+                start: self
+                    .ping_counter
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    .into(),
                 limit: 1,
                 ..Default::default()
             })

@@ -1,7 +1,6 @@
 #![allow(unreachable_code)]
 use crate::{
     downloader::PreverifiedHashesConfig,
-    kv::mdbx::MdbxEnvironment,
     models::{BlockNumber, H256},
     sentry::chain_config::ChainConfig,
     sentry2::{
@@ -12,7 +11,6 @@ use crate::{
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::{HashMap, HashSet};
 use hashlink::LinkedHashSet;
-use mdbx::EnvironmentKind;
 use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 use tracing::info;
@@ -63,38 +61,39 @@ impl<'a> HeaderDownloader<'a> {
         let mut stream = self.sentry.recv().await?;
         let hashes = self
             .preverified
-            .par_windows(9)
-            .map(|window| {
-                window
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, hash)| (*hash, i as u64))
-                    .collect::<HashMap<_, _>>()
-            })
+            .par_chunks(72)
+            .map(|chunk| chunk.into_iter().map(|v| *v).collect::<Vec<_>>())
             .collect::<Vec<_>>();
-        let progress = hashes.len() * 192 * 9;
+        let progress = hashes.len() * 72 * 192;
         let mut ticker = tokio::time::interval(Duration::from_secs(10));
         let mut pending = Vec::new();
 
-        for mut skeleton in hashes.into_iter() {
-            while !skeleton.is_empty() {
+        for skeleton in hashes.into_iter() {
+            let mut left = skeleton.iter().map(|v| *v).collect::<HashSet<_>>();
+
+            while !left.is_empty() {
                 select! {
                     _ = ticker.tick().fuse() => {
-                        info!("Downloading preverified hashes, {:?} of {:?}", pending.len(), progress);
-                        let _ = skeleton.iter().step_by(3).map(|(hash, i)| {
-                            let req = HeaderRequest {
-                                hash: Some(*hash),
-                                number: BlockNumber(*i),
-                                limit: if skeleton.len() > 3 { 3 } else { skeleton.len() } as u64*192,
-                                ..Default::default()
-                            };
-                            let sentry = self.sentry.clone();
-                            tokio::spawn(async move {
-                                let _ = sentry.send_header_request(req).await;
-                            })
+                        info!("Downloading preverified hashes, {:?} of {:?} {:#?}", pending.len(), progress, skeleton);
+                        let _ = skeleton.iter().step_by(3).filter_map(|hash| {
+                            if left.contains(hash) {
+                                let req = HeaderRequest {
+                                    start: (*hash).into(),
+                                    limit: if left.len() > 3 { 3 } else { left.len() } as u64*192,
+                                    ..Default::default()
+                                };
+                                let sentry = self.sentry.clone();
+                                Some(tokio::spawn(async move {
+                                    let _ = sentry.send_header_request(req).await;
+                                }))
+                            } else {
+                                None
+                            }
                         }).collect::<FuturesUnordered<_>>().map(|f| f.unwrap());
 
-                        self.try_find_tip().await?;
+                        if self.canonical_marker == H256::default() {
+                            self.try_find_tip().await?;
+                        }
                     }
                     msg = stream.next().fuse() => {
                         if msg.is_none() {
@@ -110,26 +109,27 @@ impl<'a> HeaderDownloader<'a> {
                                     let block = &value.0.last().unwrap();
                                     self.seen_announces.insert(block.hash);
                                     self.sentry.send_header_request(HeaderRequest {
-                                        hash: Some(block.hash),
-                                        number: block.number,
+                                        start: block.hash.into(),
                                         limit: 1,
                                         ..Default::default()
                                     }).await?;
                                 }
                             },
                             Message::BlockHeaders(value) => {
+                                info!("{:#?}", value.headers.len());
                                 if value.headers.len() % 192 == 0 && !value.headers.is_empty() {
                                     let numerator = value.headers.len() / 192;
+
                                     let remove = (0..numerator).filter_map(|j| {
                                         let hash = value.headers[j*192].hash();
-                                        if skeleton.contains_key(&hash) {
+                                        if left.contains(&hash) {
                                             Some(hash)
                                         } else {
                                             None
                                         }
                                     }).collect::<Vec<_>>();
                                     if remove.len() == numerator {
-                                        remove.into_iter().for_each(|hash| { if skeleton.remove(&hash).is_none() { unreachable!() }});
+                                        remove.into_iter().for_each(|hash| { if !left.remove(&hash) { unreachable!() }});
                                         pending.extend(value.headers);
                                     }
                                 } else if value.headers.len() == 1 {
@@ -138,8 +138,7 @@ impl<'a> HeaderDownloader<'a> {
                                     self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
                                     self.blocks_table.insert(hash, (header.number, None));
                                     self.sentry.send_header_request(HeaderRequest {
-                                        hash: Some(hash),
-                                        number: header.number,
+                                        start: hash.into(),
                                         limit: 1,
                                         skip: 1,
                                         ..Default::default()
@@ -156,8 +155,7 @@ impl<'a> HeaderDownloader<'a> {
                                 self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
                                 self.blocks_table.insert(hash, (number, Some(value.total_difficulty)));
                                 self.sentry.send_header_request(HeaderRequest {
-                                    hash: Some(hash),
-                                    number,
+                                    start: hash.into(),
                                     limit: 1,
                                     skip: 1,
                                     ..Default::default()
@@ -202,8 +200,7 @@ impl<'a> HeaderDownloader<'a> {
                                 let block = &value.0.last().unwrap();
                                 self.seen_announces.insert(block.hash);
                                 self.sentry.send_header_request(HeaderRequest {
-                                    hash: Some(block.hash),
-                                    number: block.number,
+                                    start: block.hash.into(),
                                     limit: 1,
                                     ..Default::default()
                                 }).await?;
@@ -217,8 +214,7 @@ impl<'a> HeaderDownloader<'a> {
                                 self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
                                 self.blocks_table.insert(hash, (header.number, None));
                                 self.sentry.send_header_request(HeaderRequest {
-                                    hash: Some(hash),
-                                    number: header.number,
+                                    start: hash.into(),
                                     limit: 1,
                                     skip: 1,
                                     ..Default::default()
@@ -240,8 +236,7 @@ impl<'a> HeaderDownloader<'a> {
                             self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
                             self.blocks_table.insert(hash, (number, Some(value.total_difficulty)));
                             self.sentry.send_header_request(HeaderRequest {
-                                hash: Some(hash),
-                                number,
+                                start: hash.into(),
                                 limit: 1,
                                 skip: 1,
                                 ..Default::default()
@@ -294,8 +289,7 @@ impl<'a> HeaderDownloader<'a> {
             let hash = canonical.last().unwrap().clone();
             self.sentry
                 .send_header_request(HeaderRequest {
-                    hash: Some(hash),
-                    number: self.blocks_table.get(&hash).unwrap().0,
+                    start: hash.into(),
                     limit: 1,
                     skip: 1,
                     ..Default::default()
@@ -317,8 +311,7 @@ impl<'a> HeaderDownloader<'a> {
         };
         let mut hashes = HashSet::new();
         hashes.insert(self.canonical_marker);
-        let mut pending_request =
-            HeaderRequest::new(Some(self.canonical_marker), *height, 576, 575, true);
+        let mut pending_request = HeaderRequest::new(self.canonical_marker.into(), 576, 575, true);
         loop {
             select! {
                 _ = ticker.tick().fuse() => {
@@ -335,7 +328,7 @@ impl<'a> HeaderDownloader<'a> {
                                 if hashes.insert(hash) {
                                     continue;
                                 }
-                                pending_request = HeaderRequest::new(Some(hash), header.number, 576, 575, true);
+                                pending_request = HeaderRequest::new(hash.into(), 576, 575, true);
                             }
                         }
                         _ => continue,
@@ -356,7 +349,9 @@ mod tests {
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
     async fn it_works() {
-        tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+        tracing_subscriber::fmt()
+            .with_max_level(Level::DEBUG)
+            .init();
 
         let chain_config = ChainsConfig::default().get("mainnet").unwrap();
         let sentry = SentryClient::connect("http://localhost:8000")

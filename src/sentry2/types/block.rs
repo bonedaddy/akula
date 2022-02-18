@@ -6,6 +6,18 @@ pub enum BlockId {
     Number(BlockNumber),
 }
 
+impl<T: Into<BlockNumber>> From<T> for BlockId {
+    fn from(number: T) -> Self {
+        BlockId::Number(number.into())
+    }
+}
+
+impl From<H256> for BlockId {
+    fn from(hash: H256) -> Self {
+        BlockId::Hash(hash)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, RlpEncodable, RlpDecodable)]
 pub struct BlockHashAndNumber {
     pub hash: H256,
