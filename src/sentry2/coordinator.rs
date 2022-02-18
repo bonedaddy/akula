@@ -7,8 +7,11 @@ use async_trait::async_trait;
 use auto_impl::auto_impl;
 use ethereum_interfaces::sentry as grpc_sentry;
 use futures_core::Stream;
-use futures_util::{FutureExt, StreamExt};
-use std::{pin::Pin, sync::Arc};
+use futures_util::{stream::FuturesUnordered, FutureExt, StreamExt};
+use std::{
+    pin::Pin,
+    sync::{atomic::AtomicU64, Arc},
+};
 use tokio::sync::broadcast;
 
 pub type SentryClient = grpc_sentry::sentry_client::SentryClient<tonic::transport::Channel>;
@@ -21,6 +24,7 @@ pub struct Coordinator {
     network_id: u64,
     hard_forks: Vec<u64>,
     status: Arc<AtomicStatus>,
+    pub ping_counter: Arc<AtomicU64>,
 }
 
 impl Coordinator {
@@ -47,7 +51,12 @@ impl Coordinator {
             genesis_hash,
             network_id,
             hard_forks,
+            ping_counter: Arc::new(AtomicU64::new(1)),
         }
+    }
+
+    pub fn last_ping(&self) -> BlockNumber {
+        BlockNumber(self.ping_counter.load(std::sync::atomic::Ordering::Relaxed))
     }
 }
 
@@ -100,19 +109,28 @@ impl SentryCoordinator for Coordinator {
     }
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()> {
         self.set_status().await?;
-        self.send_message(req.clone().into(), PeerFilter::Random(5))
+        self.send_message(req.into(), PeerFilter::Random(50))
             .await?;
 
         Ok(())
     }
-    async fn recv(&self, msg_ids: Vec<i32>) -> anyhow::Result<CoordinatorStream> {
+    async fn recv(&self) -> anyhow::Result<CoordinatorStream> {
         self.set_status().await?;
 
         Ok(futures_util::stream::select_all(
             futures_util::future::join_all(
                 self.sentries
                     .iter()
-                    .map(|s| recv_sentry(s, msg_ids.clone()))
+                    .map(|s| {
+                        recv_sentry(
+                            s,
+                            vec![
+                                grpc_sentry::MessageId::from(MessageId::NewBlockHashes) as i32,
+                                grpc_sentry::MessageId::from(MessageId::NewBlock) as i32,
+                                grpc_sentry::MessageId::from(MessageId::BlockHeaders) as i32,
+                            ],
+                        )
+                    })
                     .collect::<Vec<_>>(),
             )
             .await,
@@ -155,12 +173,12 @@ impl SentryCoordinator for Coordinator {
 
     async fn update_head(
         &self,
-        height: u64,
+        height: BlockNumber,
         hash: H256,
         total_difficultyy: U256,
     ) -> anyhow::Result<()> {
         let td = H256::from_slice(&total_difficultyy.to_be_bytes());
-        let status = Status::new(height, hash, td);
+        let status = Status::new(height.0, hash, td);
         self.status.store(status);
         self.set_status().await?;
 
@@ -188,6 +206,23 @@ impl SentryCoordinator for Coordinator {
             let _ = task.await;
         }
 
+        Ok(())
+    }
+
+    async fn ping(&self) -> anyhow::Result<()> {
+        let number = BlockNumber(
+            self.ping_counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
+
+        let _ = self
+            .send_header_request(HeaderRequest {
+                hash: None,
+                number,
+                limit: 1,
+                ..Default::default()
+            })
+            .await;
         Ok(())
     }
 
@@ -299,8 +334,12 @@ impl tokio_stream::Stream for SingleSentryStream {
         match Pin::new(&mut this.0).poll_next(cx) {
             std::task::Poll::Ready(Some(Ok(value))) => {
                 if let Ok(id) = MessageId::from_i32(value.id) {
+                    let msg = match decode_rlp_message(id, &value.data) {
+                        Ok(v) => v,
+                        _ => return std::task::Poll::Pending,
+                    };
                     return std::task::Poll::Ready(Some(InboundMessage {
-                        msg: decode_rlp_message(id, &value.data).unwrap(),
+                        msg,
                         peer_id: value.peer_id.unwrap_or_default().into(),
                     }));
                 };
@@ -318,7 +357,7 @@ pub trait SentryCoordinator: Send + Sync {
     async fn set_status(&self) -> anyhow::Result<()>;
     async fn send_body_request(&self, req: BodyRequest) -> anyhow::Result<()>;
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()>;
-    async fn recv(&self, msg_ids: Vec<i32>) -> anyhow::Result<CoordinatorStream>;
+    async fn recv(&self) -> anyhow::Result<CoordinatorStream>;
     async fn recv_headers(&self) -> anyhow::Result<CoordinatorStream>;
     async fn broadcast_block(&self, block: Block, total_difficulty: u128) -> anyhow::Result<()>;
     async fn propagate_new_block_hashes(
@@ -328,11 +367,12 @@ pub trait SentryCoordinator: Send + Sync {
     async fn propagate_transactions(&self, transactions: Vec<H256>) -> anyhow::Result<()>;
     async fn update_head(
         &self,
-        height: u64,
+        height: BlockNumber,
         hash: H256,
         total_difficulty: U256,
     ) -> anyhow::Result<()>;
     async fn penalize_peer(&self, penalty: Penalty) -> anyhow::Result<()>;
+    async fn ping(&self) -> anyhow::Result<()>;
     async fn send_message(&self, message: Message, predicate: PeerFilter) -> anyhow::Result<()>;
     async fn peer_count(&self) -> anyhow::Result<u64>;
 }

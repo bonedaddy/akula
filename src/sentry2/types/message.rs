@@ -117,7 +117,7 @@ impl From<HeaderRequest> for Message {
                     BlockId::Number(req.number)
                 },
                 limit: req.limit,
-                skip: if req.hash.is_some() { 1 } else { 0 },
+                skip: req.skip,
                 reverse: if req.reverse { 1 } else { 0 },
             },
         })
