@@ -92,10 +92,6 @@ impl<'a> HeaderDownloader<'a> {
                                 None
                             }
                         }).collect::<FuturesUnordered<_>>().map(|f| f.unwrap());
-
-                        if !self.found_tip {
-                            self.try_find_tip().await?;
-                        }
                     }
                     msg = stream.next().fuse() => {
                         if msg.is_none() {
@@ -103,21 +99,6 @@ impl<'a> HeaderDownloader<'a> {
                         }
 
                         match msg.unwrap().msg {
-                            Message::NewBlockHashes(value) => {
-                                if !value.0.is_empty()
-                                    && !self.found_tip
-                                    && !self.seen_announces.contains(&value.0.last().unwrap().hash)
-                                    && value.0.last().unwrap().number >= self.height {
-
-                                    let block = &value.0.last().unwrap();
-                                    self.seen_announces.insert(block.hash);
-                                    self.sentry.send_header_request(HeaderRequest {
-                                        start: block.hash.into(),
-                                        limit: 1,
-                                        ..Default::default()
-                                    }).await?;
-                                }
-                            },
                             Message::BlockHeaders(value) => {
                                 info!("{:#?}", value.headers.len());
                                 if value.headers.len() % 192 == 0 && !value.headers.is_empty() {
@@ -135,38 +116,9 @@ impl<'a> HeaderDownloader<'a> {
                                         remove.into_iter().for_each(|hash| { if !left.remove(&hash) { unreachable!() }});
                                         pending.extend(value.headers);
                                     }
-                                } else if value.headers.len() == 1 && !self.found_tip {
-                                    let header = value.headers.last().unwrap();
-                                    let hash = header.hash();
-                                    self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
-                                    self.blocks_table.insert(hash, (header.number, None));
-                                    self.sentry.send_header_request(HeaderRequest {
-                                        start: hash.into(),
-                                        limit: 1,
-                                        skip: 1,
-                                        ..Default::default()
-                                    }).await?;
                                 }
                             },
-                            Message::NewBlock(value) => {
-                                if !self.found_tip {
-                                    let (
-                                        hash,
-                                        number,
-                                        parent_hash,
-                                    ) = (value.block.header.hash(), value.block.header.number, value.block.header.parent_hash);
-
-                                    self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
-                                    self.blocks_table.insert(hash, (number, Some(value.total_difficulty)));
-                                    self.sentry.send_header_request(HeaderRequest {
-                                        start: hash.into(),
-                                        limit: 1,
-                                        skip: 1,
-                                        ..Default::default()
-                                    }).await?;
-                                }
-                            },
-                            _ => continue,
+                           _ => continue,
                         }
                     }
                 }
