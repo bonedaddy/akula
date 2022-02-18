@@ -22,7 +22,7 @@ impl From<SentryClient> for SentryPool {
     }
 }
 
-impl From<Vec<SentryClient>> for SentryPool {
+impl const From<Vec<SentryClient>> for SentryPool {
     fn from(sentry: Vec<SentryClient>) -> Self {
         Self(sentry)
     }
@@ -230,10 +230,11 @@ impl SentryCoordinator for Coordinator {
     async fn ping(&self) -> anyhow::Result<()> {
         let _ = self
             .send_header_request(HeaderRequest {
-                start: self
-                    .ping_counter
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    .into(),
+                start: BlockNumber(
+                    self.ping_counter
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                )
+                .into(),
                 limit: 1,
                 ..Default::default()
             })
@@ -348,17 +349,15 @@ impl tokio_stream::Stream for SingleSentryStream {
         let this = self.get_mut();
         match Pin::new(&mut this.0).poll_next(cx) {
             std::task::Poll::Ready(Some(Ok(value))) => {
-                if let Ok(id) = MessageId::from_i32(value.id) {
-                    let msg = match decode_rlp_message(id, &value.data) {
-                        Ok(v) => v,
-                        _ => return std::task::Poll::Pending,
-                    };
-                    return std::task::Poll::Ready(Some(InboundMessage {
-                        msg,
-                        peer_id: value.peer_id.unwrap_or_default().into(),
-                    }));
+                let id = MessageId::from(grpc_sentry::MessageId::from_i32(value.id).unwrap());
+                let msg = match decode_rlp_message(id, &value.data) {
+                    Ok(v) => v,
+                    _ => return std::task::Poll::Pending,
                 };
-                std::task::Poll::Pending
+                return std::task::Poll::Ready(Some(InboundMessage {
+                    msg,
+                    peer_id: value.peer_id.unwrap_or_default().into(),
+                }));
             }
             _ => std::task::Poll::Pending,
         }

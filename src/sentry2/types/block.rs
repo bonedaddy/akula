@@ -6,13 +6,13 @@ pub enum BlockId {
     Number(BlockNumber),
 }
 
-impl<T: Into<BlockNumber>> From<T> for BlockId {
-    fn from(number: T) -> Self {
-        BlockId::Number(number.into())
+impl const From<BlockNumber> for BlockId {
+    fn from(number: BlockNumber) -> Self {
+        BlockId::Number(number)
     }
 }
 
-impl From<H256> for BlockId {
+impl const From<H256> for BlockId {
     fn from(hash: H256) -> Self {
         BlockId::Hash(hash)
     }
@@ -45,7 +45,7 @@ pub struct NewBlock {
 }
 
 impl NewBlock {
-    pub fn new(block: Block, total_difficulty: u128) -> Self {
+    pub const fn new(block: Block, total_difficulty: u128) -> Self {
         Self {
             block,
             total_difficulty,
