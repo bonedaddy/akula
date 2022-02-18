@@ -41,27 +41,29 @@ impl std::fmt::Display for InvalidMessageId {
     }
 }
 
-impl const From<ethereum_interfaces::sentry::MessageId> for MessageId {
-    fn from(msg: ethereum_interfaces::sentry::MessageId) -> Self {
+impl const TryFrom<ethereum_interfaces::sentry::MessageId> for MessageId {
+    type Error = InvalidMessageId;
+
+    fn try_from(msg: ethereum_interfaces::sentry::MessageId) -> Result<Self, Self::Error> {
         match msg {
-            grpc_sentry::MessageId::Status66 => MessageId::Status,
-            grpc_sentry::MessageId::NewBlockHashes66 => MessageId::NewBlockHashes,
-            grpc_sentry::MessageId::Transactions66 => MessageId::Transactions,
-            grpc_sentry::MessageId::GetBlockHeaders66 => MessageId::GetBlockHeaders,
-            grpc_sentry::MessageId::BlockHeaders66 => MessageId::BlockHeaders,
-            grpc_sentry::MessageId::GetBlockBodies66 => MessageId::GetBlockBodies,
-            grpc_sentry::MessageId::BlockBodies66 => MessageId::BlockBodies,
-            grpc_sentry::MessageId::NewBlock66 => MessageId::NewBlock,
+            grpc_sentry::MessageId::Status66 => Ok(MessageId::Status),
+            grpc_sentry::MessageId::NewBlockHashes66 => Ok(MessageId::NewBlockHashes),
+            grpc_sentry::MessageId::Transactions66 => Ok(MessageId::Transactions),
+            grpc_sentry::MessageId::GetBlockHeaders66 => Ok(MessageId::GetBlockHeaders),
+            grpc_sentry::MessageId::BlockHeaders66 => Ok(MessageId::BlockHeaders),
+            grpc_sentry::MessageId::GetBlockBodies66 => Ok(MessageId::GetBlockBodies),
+            grpc_sentry::MessageId::BlockBodies66 => Ok(MessageId::BlockBodies),
+            grpc_sentry::MessageId::NewBlock66 => Ok(MessageId::NewBlock),
             grpc_sentry::MessageId::NewPooledTransactionHashes66 => {
-                MessageId::NewPooledTransactionHashes
+                Ok(MessageId::NewPooledTransactionHashes)
             }
-            grpc_sentry::MessageId::GetPooledTransactions66 => MessageId::GetPooledTransactions,
-            grpc_sentry::MessageId::PooledTransactions66 => MessageId::PooledTransactions,
-            grpc_sentry::MessageId::GetNodeData66 => MessageId::GetNodeData,
-            grpc_sentry::MessageId::NodeData66 => MessageId::NodeData,
-            grpc_sentry::MessageId::GetReceipts66 => MessageId::GetReceipts,
-            grpc_sentry::MessageId::Receipts66 => MessageId::Receipts,
-            _ => unreachable!(),
+            grpc_sentry::MessageId::GetPooledTransactions66 => Ok(MessageId::GetPooledTransactions),
+            grpc_sentry::MessageId::PooledTransactions66 => Ok(MessageId::PooledTransactions),
+            grpc_sentry::MessageId::GetNodeData66 => Ok(MessageId::GetNodeData),
+            grpc_sentry::MessageId::NodeData66 => Ok(MessageId::NodeData),
+            grpc_sentry::MessageId::GetReceipts66 => Ok(MessageId::GetReceipts),
+            grpc_sentry::MessageId::Receipts66 => Ok(MessageId::Receipts),
+            _ => Err(InvalidMessageId),
         }
     }
 }

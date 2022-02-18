@@ -349,8 +349,13 @@ impl tokio_stream::Stream for SingleSentryStream {
         let this = self.get_mut();
         match Pin::new(&mut this.0).poll_next(cx) {
             std::task::Poll::Ready(Some(Ok(value))) => {
-                let id = MessageId::from(grpc_sentry::MessageId::from_i32(value.id).unwrap());
-                let msg = match decode_rlp_message(id, &value.data) {
+                let msg = match decode_rlp_message(
+                    match MessageId::try_from(grpc_sentry::MessageId::from_i32(value.id).unwrap()) {
+                        Ok(id) => id,
+                        _ => return std::task::Poll::Pending,
+                    },
+                    &value.data,
+                ) {
                     Ok(v) => v,
                     _ => return std::task::Poll::Pending,
                 };
