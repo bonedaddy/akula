@@ -32,6 +32,7 @@ pub struct HeaderDownloader<'a> {
     pub preverified: Vec<H256>,
     /// The hash known to belong to the canonical chain(with exception for genesis and preverified hashes), defaults to 0 because we haven't yet discovered canonical chain.
     pub canonical_marker: H256,
+    pub found_tip: bool,
 
     _phantom: PhantomData<&'a ()>,
 }
@@ -53,6 +54,7 @@ impl<'a> HeaderDownloader<'a> {
             blocks_table: HashMap::new(),
             preverified,
             canonical_marker: H256::default(),
+            found_tip: false,
             _phantom: PhantomData,
         }
     }
@@ -65,7 +67,7 @@ impl<'a> HeaderDownloader<'a> {
             .map(|chunk| chunk.into_iter().map(|v| *v).collect::<Vec<_>>())
             .collect::<Vec<_>>();
         let progress = hashes.len() * 72 * 192;
-        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        let mut ticker = tokio::time::interval(Duration::from_secs(15));
         let mut pending = Vec::new();
 
         for skeleton in hashes.into_iter() {
@@ -91,7 +93,7 @@ impl<'a> HeaderDownloader<'a> {
                             }
                         }).collect::<FuturesUnordered<_>>().map(|f| f.unwrap());
 
-                        if self.canonical_marker == H256::default() {
+                        if !self.found_tip {
                             self.try_find_tip().await?;
                         }
                     }
@@ -103,6 +105,7 @@ impl<'a> HeaderDownloader<'a> {
                         match msg.unwrap().msg {
                             Message::NewBlockHashes(value) => {
                                 if !value.0.is_empty()
+                                    && !self.found_tip
                                     && !self.seen_announces.contains(&value.0.last().unwrap().hash)
                                     && value.0.last().unwrap().number >= self.height {
 
@@ -132,7 +135,7 @@ impl<'a> HeaderDownloader<'a> {
                                         remove.into_iter().for_each(|hash| { if !left.remove(&hash) { unreachable!() }});
                                         pending.extend(value.headers);
                                     }
-                                } else if value.headers.len() == 1 {
+                                } else if value.headers.len() == 1 && !self.found_tip {
                                     let header = value.headers.last().unwrap();
                                     let hash = header.hash();
                                     self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
@@ -146,20 +149,22 @@ impl<'a> HeaderDownloader<'a> {
                                 }
                             },
                             Message::NewBlock(value) => {
-                                let (
-                                    hash,
-                                    number,
-                                    parent_hash,
-                                ) = (value.block.header.hash(), value.block.header.number, value.block.header.parent_hash);
+                                if !self.found_tip {
+                                    let (
+                                        hash,
+                                        number,
+                                        parent_hash,
+                                    ) = (value.block.header.hash(), value.block.header.number, value.block.header.parent_hash);
 
-                                self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
-                                self.blocks_table.insert(hash, (number, Some(value.total_difficulty)));
-                                self.sentry.send_header_request(HeaderRequest {
-                                    start: hash.into(),
-                                    limit: 1,
-                                    skip: 1,
-                                    ..Default::default()
-                                }).await?;
+                                    self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
+                                    self.blocks_table.insert(hash, (number, Some(value.total_difficulty)));
+                                    self.sentry.send_header_request(HeaderRequest {
+                                        start: hash.into(),
+                                        limit: 1,
+                                        skip: 1,
+                                        ..Default::default()
+                                    }).await?;
+                                }
                             },
                             _ => continue,
                         }
@@ -283,6 +288,7 @@ impl<'a> HeaderDownloader<'a> {
         if canonical.len() >= 4 {
             info!("Successfully found canonical chain: {:#?}", canonical);
             self.canonical_marker = *canonical.last().unwrap();
+            self.found_tip = true;
 
             return Ok(true);
         } else if !canonical.is_empty() {
