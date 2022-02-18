@@ -30,6 +30,31 @@ pub enum MessageId {
     PooledTransactions = 14,
 }
 
+impl MessageId {
+    pub fn from_i32(i: i32) -> Result<Self, InvalidMessageId> {
+        match grpc_sentry::MessageId::from_i32(i).unwrap() {
+            grpc_sentry::MessageId::Status66 => Ok(MessageId::Status),
+            grpc_sentry::MessageId::NewBlockHashes66 => Ok(MessageId::NewBlockHashes),
+            grpc_sentry::MessageId::Transactions66 => Ok(MessageId::Transactions),
+            grpc_sentry::MessageId::GetBlockHeaders66 => Ok(MessageId::GetBlockHeaders),
+            grpc_sentry::MessageId::BlockHeaders66 => Ok(MessageId::BlockHeaders),
+            grpc_sentry::MessageId::GetBlockBodies66 => Ok(MessageId::GetBlockBodies),
+            grpc_sentry::MessageId::BlockBodies66 => Ok(MessageId::BlockBodies),
+            grpc_sentry::MessageId::NewBlock66 => Ok(MessageId::NewBlock),
+            grpc_sentry::MessageId::NewPooledTransactionHashes66 => {
+                Ok(MessageId::NewPooledTransactionHashes)
+            }
+            grpc_sentry::MessageId::GetPooledTransactions66 => Ok(MessageId::GetPooledTransactions),
+            grpc_sentry::MessageId::PooledTransactions66 => Ok(MessageId::PooledTransactions),
+            grpc_sentry::MessageId::GetNodeData66 => Ok(MessageId::GetNodeData),
+            grpc_sentry::MessageId::NodeData66 => Ok(MessageId::NodeData),
+            grpc_sentry::MessageId::GetReceipts66 => Ok(MessageId::GetReceipts),
+            grpc_sentry::MessageId::Receipts66 => Ok(MessageId::Receipts),
+            _ => Err(InvalidMessageId),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct InvalidMessageId;
 
@@ -41,32 +66,7 @@ impl std::fmt::Display for InvalidMessageId {
     }
 }
 
-impl const From<ethereum_interfaces::sentry::MessageId> for MessageId {
-    fn from(msg: ethereum_interfaces::sentry::MessageId) -> Self {
-        match msg {
-            grpc_sentry::MessageId::Status66 => MessageId::Status,
-            grpc_sentry::MessageId::NewBlockHashes66 => MessageId::NewBlockHashes,
-            grpc_sentry::MessageId::Transactions66 => MessageId::Transactions,
-            grpc_sentry::MessageId::GetBlockHeaders66 => MessageId::GetBlockHeaders,
-            grpc_sentry::MessageId::BlockHeaders66 => MessageId::BlockHeaders,
-            grpc_sentry::MessageId::GetBlockBodies66 => MessageId::GetBlockBodies,
-            grpc_sentry::MessageId::BlockBodies66 => MessageId::BlockBodies,
-            grpc_sentry::MessageId::NewBlock66 => MessageId::NewBlock,
-            grpc_sentry::MessageId::NewPooledTransactionHashes66 => {
-                MessageId::NewPooledTransactionHashes
-            }
-            grpc_sentry::MessageId::GetPooledTransactions66 => MessageId::GetPooledTransactions,
-            grpc_sentry::MessageId::PooledTransactions66 => MessageId::PooledTransactions,
-            grpc_sentry::MessageId::GetNodeData66 => MessageId::GetNodeData,
-            grpc_sentry::MessageId::NodeData66 => MessageId::NodeData,
-            grpc_sentry::MessageId::GetReceipts66 => MessageId::GetReceipts,
-            grpc_sentry::MessageId::Receipts66 => MessageId::Receipts,
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl const From<MessageId> for ethereum_interfaces::sentry::MessageId {
+impl From<MessageId> for ethereum_interfaces::sentry::MessageId {
     fn from(id: MessageId) -> Self {
         match id {
             MessageId::Status => ethereum_interfaces::sentry::MessageId::Status66,

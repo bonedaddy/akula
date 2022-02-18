@@ -15,10 +15,7 @@
     const_option,
     adt_const_params,
     let_chains,
-    associated_type_bounds,
-    const_trait_impl,
-    const_fn_trait_bound,
-    const_convert
+    associated_type_bounds
 )]
 #![recursion_limit = "256"]
 #![allow(
