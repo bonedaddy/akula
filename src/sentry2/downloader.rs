@@ -22,8 +22,8 @@ use rayon::{
     slice::{ParallelSlice, ParallelSliceMut},
 };
 use std::{
-    borrow::Borrow, collections::VecDeque, marker::PhantomData, sync::Arc, time::Duration,
-    vec::Drain,
+    borrow::Borrow, collections::VecDeque, marker::PhantomData, ops::ControlFlow, sync::Arc,
+    time::Duration, vec::Drain,
 };
 use tracing::info;
 
@@ -40,12 +40,10 @@ pub struct HeaderDownloader<'a> {
     pub childs_table: HashMap<H256, HashSet<H256>>,
     /// Mapping from the block hash to it's number and optionally total difficulty.
     pub blocks_table: HashMap<H256, (BlockNumber, Option<u128>)>,
-    /// The vector of hashes known to belong to the canonical chain.
-    pub preverified: Vec<H256>,
     /// The hash known to belong to the canonical chain(with exception for genesis and preverified hashes), defaults to 0 because we haven't yet discovered canonical chain.
     pub canonical_marker: H256,
     /// prepared requests for preverified hashes.
-    pub prepared_requests: VecDeque<Vec<H256>>,
+    pub prepared_requests: LinkedHashSet<H256>,
     pub found_tip: bool,
 
     _phantom: PhantomData<&'a ()>,
@@ -57,27 +55,17 @@ impl<'a> HeaderDownloader<'a> {
         chain_config: ChainConfig,
         height: BlockNumber,
     ) -> Self {
-        let preverified = PreverifiedHashesConfig::new(&chain_config.chain_name())
-            .map_or(vec![], |config| config.hashes);
-        let sentry = Arc::new(Coordinator::new(conn, chain_config, 0));
-        let prepared_requests =
-            if height.0 < preverified.len() as u64 * 192 && !preverified.is_empty() {
-                preverified
-                    .par_chunks(72)
-                    .map(|chunk| chunk.to_vec())
-                    .collect::<VecDeque<_>>()
-            } else {
-                VecDeque::new()
-            };
-
         Self {
-            sentry,
+            sentry: Arc::new(Coordinator::new(conn, chain_config.clone(), 0)),
             height,
             seen_announces: LinkedHashSet::new(),
             childs_table: HashMap::new(),
             blocks_table: HashMap::new(),
-            preverified,
-            prepared_requests,
+            prepared_requests: PreverifiedHashesConfig::new(&chain_config.chain_name())
+                .map_or(vec![], |config| config.hashes)
+                .iter()
+                .copied()
+                .collect::<LinkedHashSet<_>>(),
             canonical_marker: H256::default(),
             found_tip: false,
             _phantom: PhantomData,
@@ -211,71 +199,58 @@ impl<'a> HeaderDownloader<'a> {
         txn: &'tx MdbxTransaction<'tx, RW, E>,
     ) -> anyhow::Result<()> {
         let mut stream = self.sentry.recv().await?;
-        let progress = self.prepared_requests.len() * 72 * 192;
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
+        let mut requests = self.prepared_requests.clone();
         let mut pending = Vec::new();
         info!("Downloading preverified headers...");
-        info!("Progress: {}", progress);
 
-        while let Some(skeleton) = self.prepared_requests.pop_front() {
-            // FIXME: Reduce alloc.
-            let mut left = skeleton.iter().copied().collect::<HashSet<_>>();
-
-            while !left.is_empty() {
-                select! {
-                    _ = ticker.tick().fuse() => {
-                        info!("Downloading preverified hashes, {:?} of {:?} {:#?}", pending.len(), progress, skeleton);
-                        let _ = skeleton.iter().step_by(3).filter_map(|hash| {
-                            if left.contains(hash) {
-                                let req = HeaderRequest {
-                                    start: (*hash).into(),
-                                    limit: if left.len() > 3 { 3 } else { left.len() } as u64*192,
-                                    ..Default::default()
-                                };
-                                let sentry = self.sentry.clone();
-                                Some(tokio::spawn(async move {
-                                    let _ = sentry.send_header_request(req).await;
-                                }))
-                            } else {
-                                None
-                            }
-                        }).collect::<FuturesUnordered<_>>().map(|f| f.unwrap());
+        while pending.len() <= BATCH_SIZE {
+            select! {
+                _ = ticker.tick().fuse() => {
+                    let _ = requests.iter().take(24).step_by(3).map(|hash| {
+                        let req = HeaderRequest {
+                            start: (*hash).into(),
+                            limit: if requests.len() > 3 { 3 } else { requests.len() } as u64*192,
+                            ..Default::default()
+                        };
+                        let sentry = self.sentry.clone();
+                        tokio::spawn(async move {
+                            let _ = sentry.send_header_request(req).await;
+                        })
+                    }).collect::<FuturesUnordered<_>>().map(|_| ());
+                }
+                msg = stream.next().fuse() => {
+                    if msg.is_none() {
+                        continue;
                     }
-                    msg = stream.next().fuse() => {
-                        if msg.is_none() {
-                            continue;
-                        }
 
-                        match msg.unwrap().msg {
-                            Message::BlockHeaders(value) => {
-                                info!("{:#?}", value.headers.len());
-                                if value.headers.len() % 192 == 0 && !value.headers.is_empty() {
-                                    let numerator = value.headers.len() / 192;
+                    match msg.unwrap().msg {
+                        Message::BlockHeaders(value) => {
+                            info!("{:#?}", value.headers.len());
+                            if value.headers.len() % 192 == 0 && !value.headers.is_empty() {
+                                let numerator = value.headers.len() / 192;
 
-                                    let remove = (0..numerator).filter_map(|j| {
-                                        let hash = value.headers[j*192].hash();
-                                        if left.contains(&hash) {
-                                            Some(hash)
-                                        } else {
-                                            None
-                                        }
-                                    }).collect::<Vec<_>>();
-                                    if remove.len() == numerator {
-                                        remove.into_iter().for_each(|hash| { if !left.remove(&hash) { unreachable!() }});
-                                        pending.extend(value.headers);
+                                let remove = (0..numerator).filter_map(|j| {
+                                    let hash = value.headers[j*192].hash();
+                                    if requests.contains(&hash) {
+                                        Some(hash)
+                                    } else {
+                                        None
                                     }
+                                }).collect::<Vec<_>>();
+                                if remove.len() == numerator {
+                                    remove.into_iter().for_each(|hash| { if !requests.remove(&hash) { unreachable!() }});
+                                    pending.extend(value.headers);
                                 }
-                            },
-                           _ => continue,
-                        }
+                            }
+                        },
+                       _ => continue,
                     }
                 }
             }
-            if pending.len() >= BATCH_SIZE {
-                self.flush(txn, pending.drain(..)).await?;
-                return Ok(());
-            }
         }
+
+        self.flush(txn, pending.drain(..)).await?;
         Ok(())
     }
 
@@ -380,30 +355,30 @@ mod tests {
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
     async fn it_works() {
-        // tracing_subscriber::fmt()
-        //     .with_max_level(Level::DEBUG)
-        //     .init();
+        tracing_subscriber::fmt()
+            .with_max_level(Level::DEBUG)
+            .init();
 
-        // let chain_config = ChainsConfig::default().get("mainnet").unwrap();
-        // let sentry = SentryClient::connect("http://localhost:8000")
-        //     .await
-        //     .unwrap();
-        // std::fs::create_dir_all(PathBuf::from("./db")).unwrap();
-        // std::fs::create_dir_all(PathBuf::from("./db/temp")).unwrap();
-        // let db = crate::kv::new_database(PathBuf::from("./db").as_path()).unwrap();
-        // let txn = db.begin_mutable().unwrap();
-        // let etl_temp_dir = Arc::new(
-        //     tempfile::tempdir_in("./db/temp")
-        //         .context("failed to create ETL temp dir")
-        //         .unwrap(),
-        // );
+        let chain_config = ChainsConfig::default().get("mainnet").unwrap();
+        let sentry = SentryClient::connect("http://localhost:8000")
+            .await
+            .unwrap();
+        std::fs::create_dir_all(PathBuf::from("./db")).unwrap();
+        std::fs::create_dir_all(PathBuf::from("./db/temp")).unwrap();
+        let db = crate::kv::new_database(PathBuf::from("./db").as_path()).unwrap();
+        let txn = db.begin_mutable().unwrap();
+        let etl_temp_dir = Arc::new(
+            tempfile::tempdir_in("./db/temp")
+                .context("failed to create ETL temp dir")
+                .unwrap(),
+        );
 
-        // crate::genesis::initialize_genesis(&txn, &*etl_temp_dir, chain_config.chain_spec().clone())
-        //     .unwrap();
-        // txn.commit().unwrap();
+        crate::genesis::initialize_genesis(&txn, &*etl_temp_dir, chain_config.chain_spec().clone())
+            .unwrap();
+        txn.commit().unwrap();
 
-        // info!("DB initialized");
-        // let mut hd = HeaderDownloader::new(sentry, chain_config, BlockNumber(0));
-        // hd.runtime(&db).await.unwrap();
+        info!("DB initialized");
+        let mut hd = HeaderDownloader::new(sentry, chain_config, BlockNumber(0));
+        hd.runtime(&db).await.unwrap();
     }
 }
