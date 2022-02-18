@@ -9,13 +9,15 @@ use crate::{
         Coordinator, CoordinatorStream, SentryCoordinator, SentryPool,
     },
 };
-use futures_util::{select, FutureExt, StreamExt};
+use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::{HashMap, HashSet};
 use hashlink::LinkedHashSet;
 use mdbx::EnvironmentKind;
 use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 use tracing::info;
+
+const BATCH_SIZE: usize = 89856;
 
 pub struct HeaderDownloader<'a> {
     /// Sentry connector.
@@ -57,36 +59,124 @@ impl<'a> HeaderDownloader<'a> {
         }
     }
 
-    pub async fn download_preverified_hashes<E: EnvironmentKind>(
-        &'_ mut self,
-        db: &'_ MdbxEnvironment<E>,
-    ) -> anyhow::Result<()> {
+    pub async fn download_preverified_hashes(&'_ mut self) -> anyhow::Result<()> {
         let mut stream = self.sentry.recv().await?;
-        let skeletons = self
+        let hashes = self
             .preverified
-            .par_windows(8)
-            .map(|window| window.into_iter().map(|hash| *hash).collect::<HashSet<_>>())
+            .par_windows(9)
+            .map(|window| {
+                window
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, hash)| (*hash, i as u64))
+                    .collect::<HashMap<_, _>>()
+            })
             .collect::<Vec<_>>();
+        let progress = hashes.len() * 192 * 9;
+        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        let mut pending = Vec::new();
 
-        for mut skeleton in skeletons {
-            loop {
-                //select! {}
+        for mut skeleton in hashes.into_iter() {
+            while !skeleton.is_empty() {
+                select! {
+                    _ = ticker.tick().fuse() => {
+                        info!("Downloading preverified hashes, {:?} of {:?}", pending.len(), progress);
+                        let _ = skeleton.iter().step_by(3).map(|(hash, i)| {
+                            let req = HeaderRequest {
+                                hash: Some(*hash),
+                                number: BlockNumber(*i),
+                                limit: if skeleton.len() > 3 { 3 } else { skeleton.len() } as u64*192,
+                                ..Default::default()
+                            };
+                            let sentry = self.sentry.clone();
+                            tokio::spawn(async move {
+                                let _ = sentry.send_header_request(req).await;
+                            })
+                        }).collect::<FuturesUnordered<_>>().map(|f| f.unwrap());
+
+                        self.try_find_tip().await?;
+                    }
+                    msg = stream.next().fuse() => {
+                        if msg.is_none() {
+                            continue;
+                        }
+
+                        match msg.unwrap().msg {
+                            Message::NewBlockHashes(value) => {
+                                if !value.0.is_empty()
+                                    && !self.seen_announces.contains(&value.0.last().unwrap().hash)
+                                    && value.0.last().unwrap().number >= self.height {
+
+                                    let block = &value.0.last().unwrap();
+                                    self.seen_announces.insert(block.hash);
+                                    self.sentry.send_header_request(HeaderRequest {
+                                        hash: Some(block.hash),
+                                        number: block.number,
+                                        limit: 1,
+                                        ..Default::default()
+                                    }).await?;
+                                }
+                            },
+                            Message::BlockHeaders(value) => {
+                                if value.headers.len() % 192 == 0 && !value.headers.is_empty() {
+                                    let numerator = value.headers.len() / 192;
+                                    let remove = (0..numerator).filter_map(|j| {
+                                        let hash = value.headers[j*192].hash();
+                                        if skeleton.contains_key(&hash) {
+                                            Some(hash)
+                                        } else {
+                                            None
+                                        }
+                                    }).collect::<Vec<_>>();
+                                    if remove.len() == numerator {
+                                        remove.into_iter().for_each(|hash| { if skeleton.remove(&hash).is_none() { unreachable!() }});
+                                        pending.extend(value.headers);
+                                    }
+                                } else if value.headers.len() == 1 {
+                                    let header = value.headers.last().unwrap();
+                                    let hash = header.hash();
+                                    self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
+                                    self.blocks_table.insert(hash, (header.number, None));
+                                    self.sentry.send_header_request(HeaderRequest {
+                                        hash: Some(hash),
+                                        number: header.number,
+                                        limit: 1,
+                                        skip: 1,
+                                        ..Default::default()
+                                    }).await?;
+                                }
+                            },
+                            Message::NewBlock(value) => {
+                                let (
+                                    hash,
+                                    number,
+                                    parent_hash,
+                                ) = (value.block.header.hash(), value.block.header.number, value.block.header.parent_hash);
+
+                                self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
+                                self.blocks_table.insert(hash, (number, Some(value.total_difficulty)));
+                                self.sentry.send_header_request(HeaderRequest {
+                                    hash: Some(hash),
+                                    number,
+                                    limit: 1,
+                                    skip: 1,
+                                    ..Default::default()
+                                }).await?;
+                            },
+                            _ => continue,
+                        }
+                    }
+                }
             }
         }
-
-        let mut ticker = tokio::time::interval(Duration::from_secs(15));
-
         Ok(())
     }
 
-    pub async fn runtime<E: EnvironmentKind>(
-        &'_ mut self,
-        db: &'_ MdbxEnvironment<E>,
-    ) -> anyhow::Result<()> {
+    pub async fn runtime(&'_ mut self) -> anyhow::Result<()> {
         let mut stream = self.sentry.recv().await?;
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
         if self.height.0 < self.preverified.len() as u64 * 192 {
-            // download preverified hashes
+            self.download_preverified_hashes().await?;
         }
 
         loop {
@@ -94,41 +184,8 @@ impl<'a> HeaderDownloader<'a> {
                 _ = ticker.tick().fuse() => {
                     let _ = self.sentry.ping().await;
                     info!("Ping sent {:#?}", self.childs_table);
-
-                    let mut canonical = Vec::new();
-                    self.childs_table.keys().into_iter().cloned().for_each(|mut parent| {
-                        let mut chain = vec![parent];
-                        while let Some(childrens) = self.childs_table.get(&parent) {
-                            if childrens.len() == 1 {
-                                parent = *childrens.iter().next().unwrap();
-                                chain.push(parent);
-                            } else {
-                                for child in childrens {
-                                    if self.childs_table.get(child).unwrap().len() == 1 {
-                                        parent = *child;
-                                        chain.push(parent);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        if chain.len() > canonical.len() {
-                            canonical = chain;
-                        }
-                    });
-                    if canonical.len() >= 4 {
-                        info!("Successfully found canonical chain: {:#?}", canonical);
-                        self.canonical_marker = *canonical.last().unwrap();
+                    if self.try_find_tip().await? {
                         break;
-                    } else if !canonical.is_empty() {
-                        let hash = canonical.last().unwrap().clone();
-                        self.sentry.send_header_request(HeaderRequest{
-                            hash: Some(hash),
-                            number: self.blocks_table.get(&hash).unwrap().0,
-                            limit: 1,
-                            skip: 1,
-                            ..Default::default()
-                        }).await?;
                     }
                 }
                 msg = stream.next().fuse() => {
@@ -155,7 +212,6 @@ impl<'a> HeaderDownloader<'a> {
                         Message::BlockHeaders(value) => {
                             if !value.headers.is_empty()
                                 && value.headers.last().unwrap().number > self.sentry.last_ping() {
-
                                 let header = value.headers.last().unwrap();
                                 let hash = header.hash();
                                 self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
@@ -201,6 +257,53 @@ impl<'a> HeaderDownloader<'a> {
         self.prepare_requests(stream).await?;
 
         Ok(())
+    }
+
+    async fn try_find_tip(&'_ mut self) -> anyhow::Result<bool> {
+        let mut canonical = Vec::new();
+        self.childs_table
+            .keys()
+            .into_iter()
+            .cloned()
+            .for_each(|mut parent| {
+                let mut chain = vec![parent];
+                while let Some(childrens) = self.childs_table.get(&parent) {
+                    if childrens.len() == 1 {
+                        parent = *childrens.iter().next().unwrap();
+                        chain.push(parent);
+                    } else {
+                        for child in childrens {
+                            if self.childs_table.get(child).unwrap().len() == 1 {
+                                parent = *child;
+                                chain.push(parent);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if chain.len() > canonical.len() {
+                    canonical = chain;
+                }
+            });
+        if canonical.len() >= 4 {
+            info!("Successfully found canonical chain: {:#?}", canonical);
+            self.canonical_marker = *canonical.last().unwrap();
+
+            return Ok(true);
+        } else if !canonical.is_empty() {
+            let hash = canonical.last().unwrap().clone();
+            self.sentry
+                .send_header_request(HeaderRequest {
+                    hash: Some(hash),
+                    number: self.blocks_table.get(&hash).unwrap().0,
+                    limit: 1,
+                    skip: 1,
+                    ..Default::default()
+                })
+                .await?;
+        }
+
+        Ok(false)
     }
 
     async fn prepare_requests(&'_ mut self, mut stream: CoordinatorStream) -> anyhow::Result<()> {
@@ -253,12 +356,13 @@ mod tests {
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
     async fn it_works() {
-        //     tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+        tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
-        //     let chain_config = ChainsConfig::default().get("mainnet").unwrap();
-        //     let sentry = SentryClient::connect("http://localhost:8000")
-        //         .await
-        //         .unwrap();
-        // }
+        let chain_config = ChainsConfig::default().get("mainnet").unwrap();
+        let sentry = SentryClient::connect("http://localhost:8000")
+            .await
+            .unwrap();
+        let mut hd = HeaderDownloader::new(sentry, chain_config, BlockNumber(0));
+        hd.runtime().await.unwrap();
     }
 }
