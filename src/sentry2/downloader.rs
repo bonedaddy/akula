@@ -61,25 +61,23 @@ impl<'a> HeaderDownloader<'a> {
                     info!("Ping sent {:#?}", self.childs_table);
 
                     let mut canonical = Vec::new();
-                    self.childs_table.iter().for_each(|(parent, childs)| {
+                    self.childs_table.into_iter().for_each(|(parent, childs)| {
+                        let mut chain = vec![parent];
                         if childs.len() > 1 {
-                            return;
+                            for c in childs.into_iter() {
+                                if self.childs_table.get(&c).unwrap().len() == 1 {
+                                    chain.push(c);
+                                }
+                            }
+                        } else {
+                             chain.push(childs.into_iter().next().unwrap())
                         }
-                        // let queue = childs.iter().cloned().collect::<VecDeque<_>>();
-                        // check if child of the childs has only one child at the end.
-                        // and if it is we're done, find longest path, but it's fucking O(n!), we can do better.
-
-                        let child = childs.iter().next().unwrap();
-                        let mut chain = vec![*parent, *child];
-
-                        let mut hash = *child;
+                        let mut hash = *chain.last().unwrap();
                         while let Some(child) = self.childs_table.get(&hash) {
                             if child.len() > 1 {
                                 return;
                             }
-
-                            let child = child.iter().next().unwrap();
-                            chain.push(*child);
+                            chain.push(*child.into_iter().next().unwrap());
                             hash = *child;
                         }
                         if chain.len() > canonical.len() {
