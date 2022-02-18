@@ -3,6 +3,7 @@ use crate::sentry2::types::{
     NewPooledTransactionHashes,
 };
 
+#[inline(always)]
 pub fn decode_rlp_message(id: MessageId, data: &[u8]) -> anyhow::Result<Message> {
     let msg = match id {
         MessageId::NewBlockHashes => Message::NewBlockHashes(rlp::decode::<NewBlockHashes>(data)?),
@@ -20,6 +21,7 @@ pub fn decode_rlp_message(id: MessageId, data: &[u8]) -> anyhow::Result<Message>
 }
 
 impl rlp::Decodable for BlockId {
+    #[inline(always)]
     fn decode(rlp: &rlp::Rlp) -> Result<Self, rlp::DecoderError> {
         if rlp.size() == 32 {
             Ok(Self::Hash(rlp.as_val()?))
@@ -30,6 +32,7 @@ impl rlp::Decodable for BlockId {
 }
 
 impl rlp::Encodable for BlockId {
+    #[inline(always)]
     fn rlp_append(&self, s: &mut rlp::RlpStream) {
         match self {
             Self::Hash(v) => rlp::Encodable::rlp_append(v, s),

@@ -44,6 +44,7 @@ impl std::fmt::Display for InvalidMessageId {
 impl const TryFrom<ethereum_interfaces::sentry::MessageId> for MessageId {
     type Error = InvalidMessageId;
 
+    #[inline(always)]
     fn try_from(msg: ethereum_interfaces::sentry::MessageId) -> Result<Self, Self::Error> {
         match msg {
             grpc_sentry::MessageId::Status66 => Ok(MessageId::Status),
@@ -69,6 +70,7 @@ impl const TryFrom<ethereum_interfaces::sentry::MessageId> for MessageId {
 }
 
 impl const From<MessageId> for ethereum_interfaces::sentry::MessageId {
+    #[inline(always)]
     fn from(id: MessageId) -> Self {
         match id {
             MessageId::Status => ethereum_interfaces::sentry::MessageId::Status66,
@@ -109,6 +111,7 @@ pub enum Message {
 }
 
 impl From<HeaderRequest> for Message {
+    #[inline(always)]
     fn from(req: HeaderRequest) -> Self {
         Message::GetBlockHeaders(GetBlockHeaders {
             request_id: fastrand::u32(..) as u64,
@@ -123,6 +126,7 @@ impl From<HeaderRequest> for Message {
 }
 
 impl Message {
+    #[inline(always)]
     pub const fn id(&self) -> MessageId {
         match self {
             Self::NewBlockHashes(_) => MessageId::NewBlockHashes,
@@ -135,6 +139,7 @@ impl Message {
 }
 
 impl rlp::Encodable for Message {
+    #[inline(always)]
     fn rlp_append(&self, s: &mut rlp::RlpStream) {
         match self {
             Self::NewBlockHashes(v) => rlp::Encodable::rlp_append(v, s),

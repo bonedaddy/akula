@@ -13,6 +13,7 @@ pub struct HeaderRequest {
 }
 
 impl HeaderRequest {
+    #[inline]
     pub const fn new(start: BlockId, limit: u64, skip: u64, reverse: bool) -> Self {
         Self {
             start,
@@ -24,6 +25,7 @@ impl HeaderRequest {
 }
 
 impl const Default for HeaderRequest {
+    #[inline]
     fn default() -> Self {
         HeaderRequest {
             start: BlockId::Number(BlockNumber(0)),

@@ -89,6 +89,7 @@ impl SentryCoordinator for Coordinator {
         self.status.store(status);
         Ok(())
     }
+    #[inline(always)]
     async fn set_status(&self) -> anyhow::Result<()> {
         let status = self.status.load();
         let status_data = grpc_sentry::StatusData {
@@ -125,6 +126,7 @@ impl SentryCoordinator for Coordinator {
         self.send_message(msg, predicate().unwrap()).await?;
         Ok(())
     }
+    #[inline(always)]
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()> {
         self.set_status().await?;
         self.send_message(req.into(), PeerFilter::Random(50))
@@ -227,6 +229,7 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
 
+    #[inline(always)]
     async fn ping(&self) -> anyhow::Result<()> {
         let _ = self
             .send_header_request(HeaderRequest {
@@ -242,6 +245,7 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
 
+    #[inline(always)]
     async fn send_message(&self, msg: Message, predicate: PeerFilter) -> anyhow::Result<()> {
         let data = grpc_sentry::OutboundMessageData {
             id: grpc_sentry::MessageId::from(msg.id()) as i32,

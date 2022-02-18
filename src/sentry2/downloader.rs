@@ -3,9 +3,9 @@ use crate::{
     downloader::PreverifiedHashesConfig,
     kv::{
         mdbx::{MdbxEnvironment, MdbxTransaction},
-        tables::Header,
+        tables,
     },
-    models::{BlockNumber, H256},
+    models::{BlockHeader, BlockNumber, H256},
     sentry::chain_config::ChainConfig,
     sentry2::{
         types::{HeaderRequest, Message},
@@ -15,9 +15,16 @@ use crate::{
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::{HashMap, HashSet};
 use hashlink::LinkedHashSet;
+use itertools::Itertools;
 use mdbx::{EnvironmentKind, RW};
-use rayon::{iter::ParallelIterator, slice::ParallelSlice};
-use std::{collections::VecDeque, marker::PhantomData, sync::Arc, time::Duration};
+use rayon::{
+    iter::ParallelIterator,
+    slice::{ParallelSlice, ParallelSliceMut},
+};
+use std::{
+    borrow::Borrow, collections::VecDeque, marker::PhantomData, sync::Arc, time::Duration,
+    vec::Drain,
+};
 use tracing::info;
 
 const BATCH_SIZE: usize = 89856;
@@ -82,117 +89,133 @@ impl<'a> HeaderDownloader<'a> {
         &'_ mut self,
         db: &'_ MdbxEnvironment<E>,
     ) -> anyhow::Result<()> {
-        let mut stream = self.sentry.recv().await?;
-        let mut ticker = tokio::time::interval(Duration::from_secs(15));
-
         self.step(db.begin_mutable()?).await?;
 
-        loop {
-            select! {
-                _ = ticker.tick().fuse() => {
-                    let _ = self.sentry.ping().await;
-                    info!("Ping sent {:#?}", self.childs_table);
-                    if self.try_find_tip().await? {
-                        break;
-                    }
-                }
-                msg = stream.next().fuse() => {
-                    if msg.is_none() {
-                        continue;
-                    }
+        // loop {
+        //     select! {
+        //         _ = ticker.tick().fuse() => {
+        //             let _ = self.sentry.ping().await;
+        //             info!("Ping sent {:#?}", self.childs_table);
+        //             if self.try_find_tip().await? {
+        //                 break;
+        //             }
+        //         }
+        //         msg = stream.next().fuse() => {
+        //             if msg.is_none() {
+        //                 continue;
+        //             }
 
-                    match msg.unwrap().msg {
-                        Message::NewBlockHashes(value) => {
-                            if !value.0.is_empty()
-                                && !self.seen_announces.contains(&value.0.last().unwrap().hash)
-                                && value.0.last().unwrap().number >= self.height {
+        //             match msg.unwrap().msg {
+        //                 Message::NewBlockHashes(value) => {
+        //                     if !value.0.is_empty()
+        //                         && !self.seen_announces.contains(&value.0.last().unwrap().hash)
+        //                         && value.0.last().unwrap().number >= self.height {
 
-                                let block = &value.0.last().unwrap();
-                                self.seen_announces.insert(block.hash);
-                                self.sentry.send_header_request(HeaderRequest {
-                                    start: block.hash.into(),
-                                    limit: 1,
-                                    ..Default::default()
-                                }).await?;
-                            }
-                        },
-                        Message::BlockHeaders(value) => {
-                            if !value.headers.is_empty()
-                                && value.headers.last().unwrap().number > self.sentry.last_ping() {
-                                let header = value.headers.last().unwrap();
-                                let hash = header.hash();
-                                self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
-                                self.blocks_table.insert(hash, (header.number, None));
-                                self.sentry.send_header_request(HeaderRequest {
-                                    start: hash.into(),
-                                    limit: 1,
-                                    skip: 1,
-                                    ..Default::default()
-                                }).await?;
-                                if self.height < header.number {
-                                    self.height = header.number;
-                                }
-                            }
-                        },
-                        Message::NewBlock(value) => {
-                            info!("New block: {:#?}", value.block.header.number);
+        //                         let block = &value.0.last().unwrap();
+        //                         self.seen_announces.insert(block.hash);
+        //                         self.sentry.send_header_request(HeaderRequest {
+        //                             start: block.hash.into(),
+        //                             limit: 1,
+        //                             ..Default::default()
+        //                         }).await?;
+        //                     }
+        //                 },
+        //                 Message::BlockHeaders(value) => {
+        //                     if !value.headers.is_empty()
+        //                         && value.headers.last().unwrap().number > self.sentry.last_ping() {
+        //                         let header = value.headers.last().unwrap();
+        //                         let hash = header.hash();
+        //                         self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
+        //                         self.blocks_table.insert(hash, (header.number, None));
+        //                         self.sentry.send_header_request(HeaderRequest {
+        //                             start: hash.into(),
+        //                             limit: 1,
+        //                             skip: 1,
+        //                             ..Default::default()
+        //                         }).await?;
+        //                         if self.height < header.number {
+        //                             self.height = header.number;
+        //                         }
+        //                     }
+        //                 },
+        //                 Message::NewBlock(value) => {
+        //                     let (
+        //                         hash,
+        //                         number,
+        //                         parent_hash,
+        //                     ) = (value.block.header.hash(), value.block.header.number, value.block.header.parent_hash);
 
-                            let (
-                                hash,
-                                number,
-                                parent_hash,
-                            ) = (value.block.header.hash(), value.block.header.number, value.block.header.parent_hash);
+        //                     self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
+        //                     self.blocks_table.insert(hash, (number, Some(value.total_difficulty)));
+        //                     self.sentry.send_header_request(HeaderRequest {
+        //                         start: hash.into(),
+        //                         limit: 1,
+        //                         skip: 1,
+        //                         ..Default::default()
+        //                     }).await?;
+        //                     self.height = number;
+        //                 },
+        //                 _ => continue,
+        //             }
+        //         }
+        //     }
+        // }
 
-                            self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
-                            self.blocks_table.insert(hash, (number, Some(value.total_difficulty)));
-                            self.sentry.send_header_request(HeaderRequest {
-                                start: hash.into(),
-                                limit: 1,
-                                skip: 1,
-                                ..Default::default()
-                            }).await?;
-                            self.height = number;
-                        },
-                        _ => continue,
-                    }
-                }
-            }
-        }
-
-        self.prepare_requests(stream).await?;
+        // self.prepare_requests(stream).await?;
 
         Ok(())
     }
 
     /// Runs next step on the finite time.
-    pub async fn step<E: EnvironmentKind>(
-        &'_ mut self,
-        _: MdbxTransaction<'_, RW, E>,
+    pub async fn step<'tx, E: EnvironmentKind>(
+        // FIXME: add way for a caller to decide whether to continue or not.
+        &'tx mut self,
+        txn: MdbxTransaction<'_, RW, E>,
     ) -> anyhow::Result<()> {
-        while self.height.0 < self.preverified.len() as u64 * 192 {
-            //self.download_preverified_hashes().await?;
-        }
+        info!("Starting downloader step");
+        self.download_preverified_hashes(txn.borrow()).await?;
+        txn.commit()?;
         Ok(())
     }
 
     /// Flushes step progress.
-    pub async fn flush<E: EnvironmentKind>(
+    pub async fn flush<'b, E: EnvironmentKind>(
         &'_ mut self,
-        _: Vec<Header>,
-        _: &mut MdbxTransaction<'_, RW, E>,
+        txn: &'_ MdbxTransaction<'_, RW, E>,
+        headers: Drain<'b, BlockHeader>,
     ) -> anyhow::Result<()> {
+        let mut cursor_header_num = txn.cursor(tables::HeaderNumber)?;
+        let mut cursor_header = txn.cursor(tables::Header)?;
+        let mut cursor_canonical = txn.cursor(tables::CanonicalHeader)?;
+        let mut cursor_td = txn.cursor(tables::HeadersTotalDifficulty)?;
+        let mut headers = headers.collect_vec();
+        let mut td = 0u128.into();
+        headers.par_sort_unstable_by_key(|header| header.number);
+        headers.into_iter().for_each(|header| {
+            let hash = header.hash();
+            let number = header.number;
+            td += header.difficulty;
+
+            cursor_header_num.put(hash, number).unwrap();
+            cursor_header.put((number, hash), header).unwrap();
+            cursor_canonical.put(number, hash).unwrap();
+            cursor_td.put((number, hash), td).unwrap();
+        });
+
         Ok(())
     }
 
-    /// Downloads preverified headers in a finite number of steps.
-    pub async fn download_preverified_hashes<E: EnvironmentKind>(
+    /// Downloads preverified headers in the finite number of steps.
+    pub async fn download_preverified_hashes<'tx, E: EnvironmentKind>(
         &'_ mut self,
-        _: MdbxTransaction<'_, RW, E>,
+        txn: &'tx MdbxTransaction<'tx, RW, E>,
     ) -> anyhow::Result<()> {
         let mut stream = self.sentry.recv().await?;
         let progress = self.prepared_requests.len() * 72 * 192;
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
         let mut pending = Vec::new();
+        info!("Downloading preverified headers...");
+        info!("Progress: {}", progress);
 
         while let Some(skeleton) = self.prepared_requests.pop_front() {
             // FIXME: Reduce alloc.
@@ -248,10 +271,11 @@ impl<'a> HeaderDownloader<'a> {
                     }
                 }
             }
-
-            if pending.len() >= BATCH_SIZE {}
+            if pending.len() >= BATCH_SIZE {
+                self.flush(txn, pending.drain(..)).await?;
+                return Ok(());
+            }
         }
-
         Ok(())
     }
 
@@ -286,7 +310,6 @@ impl<'a> HeaderDownloader<'a> {
             info!("Successfully found canonical chain: {:#?}", canonical);
             self.canonical_marker = *canonical.last().unwrap();
             self.found_tip = true;
-
             return Ok(true);
         } else if !canonical.is_empty() {
             self.sentry
@@ -348,20 +371,39 @@ impl<'a> HeaderDownloader<'a> {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
+    use anyhow::Context;
+    use std::path::PathBuf;
+
     use crate::{sentry::chain_config::ChainsConfig, sentry2::SentryClient};
     use tracing::Level;
 
     use super::*;
     #[tokio::test(flavor = "multi_thread")]
     async fn it_works() {
-        tracing_subscriber::fmt()
-            .with_max_level(Level::DEBUG)
-            .init();
+        // tracing_subscriber::fmt()
+        //     .with_max_level(Level::DEBUG)
+        //     .init();
 
-        let chain_config = ChainsConfig::default().get("mainnet").unwrap();
-        let sentry = SentryClient::connect("http://localhost:8000")
-            .await
-            .unwrap();
-        let mut hd = HeaderDownloader::new(sentry, chain_config, BlockNumber(0));
+        // let chain_config = ChainsConfig::default().get("mainnet").unwrap();
+        // let sentry = SentryClient::connect("http://localhost:8000")
+        //     .await
+        //     .unwrap();
+        // std::fs::create_dir_all(PathBuf::from("./db")).unwrap();
+        // std::fs::create_dir_all(PathBuf::from("./db/temp")).unwrap();
+        // let db = crate::kv::new_database(PathBuf::from("./db").as_path()).unwrap();
+        // let txn = db.begin_mutable().unwrap();
+        // let etl_temp_dir = Arc::new(
+        //     tempfile::tempdir_in("./db/temp")
+        //         .context("failed to create ETL temp dir")
+        //         .unwrap(),
+        // );
+
+        // crate::genesis::initialize_genesis(&txn, &*etl_temp_dir, chain_config.chain_spec().clone())
+        //     .unwrap();
+        // txn.commit().unwrap();
+
+        // info!("DB initialized");
+        // let mut hd = HeaderDownloader::new(sentry, chain_config, BlockNumber(0));
+        // hd.runtime(&db).await.unwrap();
     }
 }

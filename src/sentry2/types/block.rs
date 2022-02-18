@@ -7,12 +7,14 @@ pub enum BlockId {
 }
 
 impl const From<BlockNumber> for BlockId {
+    #[inline(always)]
     fn from(number: BlockNumber) -> Self {
         BlockId::Number(number)
     }
 }
 
 impl const From<H256> for BlockId {
+    #[inline(always)]
     fn from(hash: H256) -> Self {
         BlockId::Hash(hash)
     }
@@ -24,16 +26,23 @@ pub struct BlockHashAndNumber {
     pub number: BlockNumber,
 }
 
+impl BlockHashAndNumber {
+    pub const fn new(hash: H256, number: BlockNumber) -> Self {
+        Self { hash, number }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, RlpEncodableWrapper, RlpDecodableWrapper)]
 pub struct NewBlockHashes(pub Vec<BlockHashAndNumber>);
 
 impl NewBlockHashes {
+    #[inline]
     fn new(block_hashes: Vec<(H256, BlockNumber)>) -> Self {
         Self(
             block_hashes
                 .into_iter()
-                .map(|(hash, number)| BlockHashAndNumber { hash, number })
-                .collect(),
+                .map(|(hash, number)| BlockHashAndNumber::new(hash, number))
+                .collect::<Vec<_>>(),
         )
     }
 }

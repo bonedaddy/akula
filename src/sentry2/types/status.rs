@@ -36,7 +36,7 @@ impl PartialEq for Status {
 }
 
 impl Status {
-    pub fn new(height: u64, hash: H256, total_difficulty: H256) -> Self {
+    pub const fn new(height: u64, hash: H256, total_difficulty: H256) -> Self {
         Self {
             height,
             hash,
