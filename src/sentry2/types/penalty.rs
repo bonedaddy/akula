@@ -1,7 +1,7 @@
-use crate::models::H256;
+use crate::models::H512;
 use ethereum_interfaces::sentry as grpc_sentry;
 
-pub type PeerId = H256;
+pub type PeerId = H512;
 
 #[derive(Debug, Clone)]
 pub enum PenaltyKind {
@@ -14,7 +14,7 @@ pub enum PenaltyKind {
     TooFarPast,
 }
 
-impl Default for PenaltyKind {
+impl const Default for PenaltyKind {
     fn default() -> Self {
         PenaltyKind::BadBlock
     }
@@ -34,9 +34,6 @@ impl Penalty {
 
 impl const From<Penalty> for grpc_sentry::PenalizePeerRequest {
     fn from(penalty: Penalty) -> Self {
-        grpc_sentry::PenalizePeerRequest {
-            peer_id: Some(penalty.peer_id.into()),
-            penalty: 0,
-        }
+        grpc_sentry::PenalizePeerRequest { peer_id: Some(penalty.peer_id.into()), penalty: 0 }
     }
 }

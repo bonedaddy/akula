@@ -1,4 +1,3 @@
-#![allow(unreachable_code)]
 use crate::{
     downloader::PreverifiedHashesConfig,
     kv::{
@@ -17,14 +16,8 @@ use hashbrown::{HashMap, HashSet};
 use hashlink::LinkedHashSet;
 use itertools::Itertools;
 use mdbx::{EnvironmentKind, RW};
-use rayon::{
-    iter::ParallelIterator,
-    slice::{ParallelSlice, ParallelSliceMut},
-};
-use std::{
-    borrow::Borrow, collections::VecDeque, marker::PhantomData, ops::ControlFlow, sync::Arc,
-    time::Duration, vec::Drain,
-};
+use rayon::slice::ParallelSliceMut;
+use std::{borrow::Borrow, marker::PhantomData, sync::Arc, time::Duration, vec::Drain};
 use tracing::info;
 
 const BATCH_SIZE: usize = 89856;
@@ -40,7 +33,8 @@ pub struct HeaderDownloader<'a> {
     pub childs_table: HashMap<H256, HashSet<H256>>,
     /// Mapping from the block hash to it's number and optionally total difficulty.
     pub blocks_table: HashMap<H256, (BlockNumber, Option<u128>)>,
-    /// The hash known to belong to the canonical chain(with exception for genesis and preverified hashes), defaults to 0 because we haven't yet discovered canonical chain.
+    /// The hash known to belong to the canonical chain(defaults to our latest checkpoint or
+    /// genesis).
     pub canonical_marker: H256,
     /// prepared requests for preverified hashes.
     pub prepared_requests: LinkedHashSet<H256>,
@@ -110,10 +104,11 @@ impl<'a> HeaderDownloader<'a> {
         //                 },
         //                 Message::BlockHeaders(value) => {
         //                     if !value.headers.is_empty()
-        //                         && value.headers.last().unwrap().number > self.sentry.last_ping() {
-        //                         let header = value.headers.last().unwrap();
+        //                         && value.headers.last().unwrap().number > self.sentry.last_ping()
+        // {                         let header = value.headers.last().unwrap();
         //                         let hash = header.hash();
-        //                         self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
+        //
+        // self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
         //                         self.blocks_table.insert(hash, (header.number, None));
         //                         self.sentry.send_header_request(HeaderRequest {
         //                             start: hash.into(),
@@ -131,13 +126,15 @@ impl<'a> HeaderDownloader<'a> {
         //                         hash,
         //                         number,
         //                         parent_hash,
-        //                     ) = (value.block.header.hash(), value.block.header.number, value.block.header.parent_hash);
+        //                     ) = (value.block.header.hash(), value.block.header.number,
+        // value.block.header.parent_hash);
 
-        //                     self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
-        //                     self.blocks_table.insert(hash, (number, Some(value.total_difficulty)));
-        //                     self.sentry.send_header_request(HeaderRequest {
-        //                         start: hash.into(),
-        //                         limit: 1,
+        //
+        // self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
+        //                     self.blocks_table.insert(hash, (number,
+        // Some(value.total_difficulty)));
+        // self.sentry.send_header_request(HeaderRequest {                         start:
+        // hash.into(),                         limit: 1,
         //                         skip: 1,
         //                         ..Default::default()
         //                     }).await?;
@@ -154,23 +151,55 @@ impl<'a> HeaderDownloader<'a> {
         Ok(())
     }
 
+    pub async fn download_canonical<E: EnvironmentKind>(
+        &'_ mut self,
+        txn: &'_ MdbxTransaction<'_, RW, E>,
+    ) -> anyhow::Result<()> {
+        let mut stream = self.sentry.recv().await?;
+        let mut pending = Vec::<BlockHeader>::with_capacity(100000);
+        let mut ticker = tokio::time::interval(Duration::from_secs(15));
+
+        while pending.len() < BATCH_SIZE {
+            select! {
+                _ = ticker.tick().fuse() => {
+
+                }
+                msg = stream.next().fuse() => {
+                    if msg.is_none() {
+                        continue;
+                    }
+                    match msg.unwrap().msg {
+                        Message::NewBlockHashes(v) => {
+
+
+                        }
+                        Message::GetBlockHeaders(_) => todo!(),
+                        Message::BlockHeaders(_) => todo!(),
+                        Message::NewBlock(_) => todo!(),
+                        Message::NewPooledTransactionHashes(_) => todo!(),
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Runs next step on the finite time.
-    pub async fn step<'tx, E: EnvironmentKind>(
-        // FIXME: add way for a caller to decide whether to continue or not.
-        &'tx mut self,
+    pub async fn step<E: EnvironmentKind>(
+        &'_ mut self,
         txn: MdbxTransaction<'_, RW, E>,
     ) -> anyhow::Result<()> {
         info!("Starting downloader step");
-        self.download_preverified_hashes(txn.borrow()).await?;
         txn.commit()?;
         Ok(())
     }
 
     /// Flushes step progress.
-    pub async fn flush<'b, E: EnvironmentKind>(
+    pub async fn flush<E: EnvironmentKind>(
         &'_ mut self,
         txn: &'_ MdbxTransaction<'_, RW, E>,
-        headers: Drain<'b, BlockHeader>,
+        headers: Drain<'_, BlockHeader>,
     ) -> anyhow::Result<()> {
         let mut cursor_header_num = txn.cursor(tables::HeaderNumber)?;
         let mut cursor_header = txn.cursor(tables::Header)?;
@@ -193,99 +222,34 @@ impl<'a> HeaderDownloader<'a> {
         Ok(())
     }
 
-    /// Downloads preverified headers in the finite number of steps.
-    pub async fn download_preverified_hashes<'tx, E: EnvironmentKind>(
-        &'_ mut self,
-        txn: &'tx MdbxTransaction<'tx, RW, E>,
-    ) -> anyhow::Result<()> {
-        let mut stream = self.sentry.recv().await?;
-        let mut ticker = tokio::time::interval(Duration::from_secs(15));
-        let mut requests = self.prepared_requests.clone();
-        let mut pending = Vec::new();
-        info!("Downloading preverified headers...");
-
-        while pending.len() <= BATCH_SIZE {
-            select! {
-                _ = ticker.tick().fuse() => {
-                    let _ = requests.iter().take(24).step_by(3).map(|hash| {
-                        let req = HeaderRequest {
-                            start: (*hash).into(),
-                            limit: if requests.len() > 3 { 3 } else { requests.len() } as u64*192,
-                            ..Default::default()
-                        };
-                        let sentry = self.sentry.clone();
-                        tokio::spawn(async move {
-                            let _ = sentry.send_header_request(req).await;
-                        })
-                    }).collect::<FuturesUnordered<_>>().map(|_| ());
-                }
-                msg = stream.next().fuse() => {
-                    if msg.is_none() {
-                        continue;
-                    }
-
-                    match msg.unwrap().msg {
-                        Message::BlockHeaders(value) => {
-                            info!("{:#?}", value.headers.len());
-                            if value.headers.len() % 192 == 0 && !value.headers.is_empty() {
-                                let numerator = value.headers.len() / 192;
-
-                                let remove = (0..numerator).filter_map(|j| {
-                                    let hash = value.headers[j*192].hash();
-                                    if requests.contains(&hash) {
-                                        Some(hash)
-                                    } else {
-                                        None
-                                    }
-                                }).collect::<Vec<_>>();
-                                if remove.len() == numerator {
-                                    remove.into_iter().for_each(|hash| { if !requests.remove(&hash) { unreachable!() }});
-                                    pending.extend(value.headers);
-                                }
-                            }
-                        },
-                       _ => continue,
-                    }
-                }
-            }
-        }
-
-        self.flush(txn, pending.drain(..)).await?;
-        Ok(())
-    }
-
     /// Finds chain tip if it's possible at the given moment.
     pub async fn try_find_tip(&'_ mut self) -> anyhow::Result<bool> {
         let mut canonical = Vec::new();
-        self.childs_table
-            .keys()
-            .into_iter()
-            .cloned()
-            .for_each(|mut parent| {
-                let mut chain = vec![parent];
-                while let Some(childrens) = self.childs_table.get(&parent) {
-                    if childrens.len() == 1 {
-                        parent = *childrens.iter().next().unwrap();
-                        chain.push(parent);
-                    } else {
-                        for child in childrens {
-                            if self.childs_table.get(child).unwrap().len() == 1 {
-                                parent = *child;
-                                chain.push(parent);
-                                break;
-                            }
+        self.childs_table.keys().into_iter().cloned().for_each(|mut parent| {
+            let mut chain = vec![parent];
+            while let Some(childrens) = self.childs_table.get(&parent) {
+                if childrens.len() == 1 {
+                    parent = *childrens.iter().next().unwrap();
+                    chain.push(parent);
+                } else {
+                    for child in childrens {
+                        if self.childs_table.get(child).unwrap().len() == 1 {
+                            parent = *child;
+                            chain.push(parent);
+                            break
                         }
                     }
                 }
-                if chain.len() > canonical.len() {
-                    canonical = chain;
-                }
-            });
+            }
+            if chain.len() > canonical.len() {
+                canonical = chain;
+            }
+        });
         if canonical.len() >= 4 {
             info!("Successfully found canonical chain: {:#?}", canonical);
             self.canonical_marker = *canonical.last().unwrap();
             self.found_tip = true;
-            return Ok(true);
+            return Ok(true)
         } else if !canonical.is_empty() {
             self.sentry
                 .send_header_request(HeaderRequest {
@@ -300,6 +264,7 @@ impl<'a> HeaderDownloader<'a> {
         Ok(false)
     }
 
+    #[allow(unreachable_code)]
     pub async fn prepare_requests(
         &'_ mut self,
         mut stream: CoordinatorStream,
@@ -307,10 +272,8 @@ impl<'a> HeaderDownloader<'a> {
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
         let (height, td) = self.blocks_table.get(&self.canonical_marker).unwrap();
         if td.is_some() {
-            let _ = self
-                .sentry
-                .update_head(*height, self.canonical_marker, td.unwrap().into())
-                .await;
+            let _ =
+                self.sentry.update_head(*height, self.canonical_marker, td.unwrap().into()).await;
         };
         let mut hashes = HashSet::new();
         hashes.insert(self.canonical_marker);
@@ -341,44 +304,5 @@ impl<'a> HeaderDownloader<'a> {
         }
 
         Ok(())
-    }
-}
-#[cfg(test)]
-#[allow(unused_imports)]
-mod tests {
-    use anyhow::Context;
-    use std::path::PathBuf;
-
-    use crate::{sentry::chain_config::ChainsConfig, sentry2::SentryClient};
-    use tracing::Level;
-
-    use super::*;
-    #[tokio::test(flavor = "multi_thread")]
-    async fn it_works() {
-        tracing_subscriber::fmt()
-            .with_max_level(Level::DEBUG)
-            .init();
-
-        let chain_config = ChainsConfig::default().get("mainnet").unwrap();
-        let sentry = SentryClient::connect("http://localhost:8000")
-            .await
-            .unwrap();
-        std::fs::create_dir_all(PathBuf::from("./db")).unwrap();
-        std::fs::create_dir_all(PathBuf::from("./db/temp")).unwrap();
-        let db = crate::kv::new_database(PathBuf::from("./db").as_path()).unwrap();
-        let txn = db.begin_mutable().unwrap();
-        let etl_temp_dir = Arc::new(
-            tempfile::tempdir_in("./db/temp")
-                .context("failed to create ETL temp dir")
-                .unwrap(),
-        );
-
-        crate::genesis::initialize_genesis(&txn, &*etl_temp_dir, chain_config.chain_spec().clone())
-            .unwrap();
-        txn.commit().unwrap();
-
-        info!("DB initialized");
-        let mut hd = HeaderDownloader::new(sentry, chain_config, BlockNumber(0));
-        hd.runtime(&db).await.unwrap();
     }
 }

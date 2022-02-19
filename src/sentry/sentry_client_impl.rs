@@ -141,7 +141,7 @@ impl SentryClient for SentryClientImpl {
                     let grpc_message_id = grpc_sentry::MessageId::from_i32(inbound_message.id)
                         .ok_or_else(|| anyhow::format_err!("SentryClient receive_messages stream got an invalid MessageId {}", inbound_message.id))?;
                     let message_id = EthMessageId::try_from(grpc_message_id)?;
-                    let grpc_peer_id: Option<grpc_types::H256> = inbound_message.peer_id;
+                    let grpc_peer_id: Option<grpc_types::H512> = inbound_message.peer_id;
                     let peer_id: Option<PeerId> = grpc_peer_id.map(PeerId::from);
                     let message_bytes: bytes::Bytes = inbound_message.data;
                     let message = message_decoder::decode_rlp_message(message_id, message_bytes.as_ref())?;

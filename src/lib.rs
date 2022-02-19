@@ -2,7 +2,6 @@
     bool_to_option,
     generator_trait,
     generators,
-    async_stream,
     let_else,
     map_first_last,
     never_type,
