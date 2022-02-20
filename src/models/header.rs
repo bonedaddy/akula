@@ -1,5 +1,3 @@
-use std::sync::atomic::AtomicPtr;
-
 use super::*;
 use crate::crypto::*;
 use bytes::Bytes;
