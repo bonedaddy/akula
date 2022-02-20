@@ -1,9 +1,19 @@
+#![allow(
+    unused_mut,
+    unused,
+    unused_attributes,
+    unused_variables,
+    unused_imports
+)]
 use crate::{
-    kv::{mdbx::MdbxTransaction, tables},
+    kv::{
+        mdbx::{MdbxEnvironment, MdbxTransaction},
+        tables,
+    },
     models::{BlockHeader, BlockNumber, H256},
     sentry::chain_config::ChainConfig,
     sentry2::{
-        types::{HeaderRequest, Message},
+        types::{HeaderRequest, Message, Status},
         Coordinator, CoordinatorStream, SentryCoordinator, SentryPool,
     },
 };
@@ -11,14 +21,13 @@ use futures_util::{select, FutureExt, StreamExt};
 use hashbrown::{HashMap, HashSet};
 use hashlink::LinkedHashSet;
 use itertools::Itertools;
-use mdbx::{EnvironmentKind, RW};
+use mdbx::{EnvironmentKind, RO, RW};
 use rayon::slice::ParallelSliceMut;
-use std::{marker::PhantomData, sync::Arc, time::Duration, vec::Drain};
+use std::{sync::Arc, time::Duration, vec::Drain};
 use tracing::info;
 
 const BATCH_SIZE: usize = 89856;
-
-pub struct HeaderDownloader<'a> {
+pub struct HeaderDownloader {
     /// Sentry connector.
     pub sentry: Arc<Coordinator>,
     /// Our current height.
@@ -32,136 +41,82 @@ pub struct HeaderDownloader<'a> {
     /// The hash known to belong to the canonical chain(defaults to our latest checkpoint or
     /// genesis).
     pub canonical_marker: H256,
-    /// prepared requests for preverified hashes.
-    //    pub prepared_requests: LinkedHashSet<H256>,
-    pub found_tip: bool,
 
-    _phantom: PhantomData<&'a ()>,
+    pub found_tip: bool,
 }
 
-impl<'a> HeaderDownloader<'a> {
-    pub fn new<T: Into<SentryPool>>(
+impl HeaderDownloader {
+    pub fn new<T: Into<SentryPool>, E: EnvironmentKind>(
         conn: T,
+        txn: MdbxTransaction<'_, RO, E>,
         chain_config: ChainConfig,
-        height: BlockNumber,
-    ) -> Self {
-        Self {
-            sentry: Arc::new(Coordinator::new(conn, chain_config.clone(), 0)),
-            height,
+    ) -> anyhow::Result<Self> {
+        let block = txn
+            .cursor(tables::HeaderNumber)?
+            .last()?
+            .unwrap_or_else(|| (chain_config.genesis_block_hash(), BlockNumber(0)));
+        let td = txn
+            .get(tables::HeadersTotalDifficulty, (block.1, block.0))?
+            .unwrap_or_else(|| chain_config.chain_spec().genesis.seal.difficulty())
+            .to_be_bytes()
+            .into();
+        Ok(Self {
+            sentry: Arc::new(Coordinator::new(
+                conn,
+                chain_config,
+                Status::new(block.1 .0, block.0, td),
+            )),
+            height: block.1,
             seen_announces: LinkedHashSet::new(),
             childs_table: HashMap::new(),
             blocks_table: HashMap::new(),
-            canonical_marker: H256::default(),
+            canonical_marker: block.0,
             found_tip: false,
-            _phantom: PhantomData,
-        }
-    }
-
-    pub async fn evaluate_chain_tip(&'_ mut self) -> anyhow::Result<()> {
-        Ok(())
+        })
     }
 
     /// Runtime of the downloader.
-    pub async fn runtime(&'_ mut self) -> anyhow::Result<()> {
+    pub async fn runtime<E: EnvironmentKind>(
+        &mut self,
+        db: &'_ MdbxEnvironment<E>,
+    ) -> anyhow::Result<()> {
+        self.evaluate_chain_tip().await?;
+        let (block_number, hash) = db
+            .begin()?
+            .cursor(tables::HeaderNumber)?
+            .last()?
+            .map_or((BlockNumber(0), self.sentry.genesis_hash), |(h, v)| (v, h));
+        let can_deal_in_one_step = ((if self.height.0 >= BATCH_SIZE as u64 {
+            self.height - BATCH_SIZE as u64
+        } else {
+            self.height
+        }) - block_number.0)
+            <= BlockNumber(BATCH_SIZE as u64);
+        info!(
+            "Starting header downloader with height: {}, can_deal_in_one_step: {}",
+            self.height, can_deal_in_one_step
+        );
+
         let mut stream = self.sentry.recv().await?;
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
 
         loop {
             select! {
                 _ = ticker.tick().fuse() => {
-                    let _ = self.sentry.ping().await;
-                    info!("Ping sent {:#?}", self.childs_table);
-                    if self.try_find_tip().await? {
-                            break
-                    };
+
                 }
                 msg = stream.next().fuse() => {
-                    if msg.is_none() {
-                        continue;
-                    }
-                    match msg.unwrap().msg {
-                        Message::NewBlockHashes(v) => {
-                            if !v.0.is_empty()
-                                && !self.seen_announces.contains(&v.0.last().unwrap().hash)
-                                && v.0.last().unwrap().number >= self.height {
 
-                                let block = v.0.last().unwrap();
-                                self.seen_announces.insert(block.hash);
-                                self.sentry.send_header_request(HeaderRequest {
-                                    start: block.hash.into(),
-                                    limit: 1,
-                                    ..Default::default()
-                                }).await?;
-                            }
-                        },
-                        Message::BlockHeaders(value) => {
-                            if !value.headers.is_empty()
-                                && value.headers.last().unwrap().number > self.sentry.last_ping()
-                                && value.headers.len()%192 == 0 {
-
-                                info!("{:#?}", value.headers.len());
-
-                            } else if value.headers.len() == 1
-                                && value.headers.last().unwrap().number > self.sentry.last_ping()
-                                {
-
-                                let header = value.headers.last().unwrap();
-                                let hash = header.hash();
-
-                                self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
-                                self.blocks_table.insert(hash, (header.number, None));
-                                self.sentry.send_header_request(HeaderRequest {
-                                    start: hash.into(),
-                                    limit: 1,
-                                    skip: 1,
-                                    ..Default::default()
-                                }).await?;
-                                if self.height < header.number {
-                                    self.height = header.number;
-                                }
-                            }
-                        },
-                        Message::NewBlock(value) => {
-                            info!("New block: {:#?}", value.block.header.number);
-
-                            let (hash, number, parent_hash)
-                                = (value.block.header.hash(), value.block.header.number, value.block.header.parent_hash);
-
-                            self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
-                            self.blocks_table.insert(hash, (number, Some(value.total_difficulty)));
-                            self.sentry.send_header_request(HeaderRequest {
-                                start: hash.into(),
-                                limit: 1,
-                                skip: 1,
-                                ..Default::default()
-                            }).await?;
-                            self.height = number;
-                        },
-                        _ => continue,
-                    }
                 }
             }
         }
-
-        // self.prepare_requests(stream).await?;
-
-        Ok(())
-    }
-
-    pub async fn download_canonical<E: EnvironmentKind>(
-        &'_ mut self,
-        _txn: &'_ MdbxTransaction<'_, RW, E>,
-    ) -> anyhow::Result<()> {
-        let mut stream = self.sentry.recv().await?;
-        let pending = Vec::<BlockHeader>::with_capacity(100000);
-        let mut ticker = tokio::time::interval(Duration::from_secs(15));
 
         Ok(())
     }
 
     /// Runs next step on the finite time.
     pub async fn step<E: EnvironmentKind>(
-        &'_ mut self,
+        &mut self,
         txn: MdbxTransaction<'_, RW, E>,
     ) -> anyhow::Result<()> {
         info!("Starting downloader step");
@@ -171,7 +126,7 @@ impl<'a> HeaderDownloader<'a> {
 
     /// Flushes step progress.
     pub async fn flush<E: EnvironmentKind>(
-        &'_ mut self,
+        &mut self,
         txn: &'_ MdbxTransaction<'_, RW, E>,
         headers: Drain<'_, BlockHeader>,
     ) -> anyhow::Result<()> {
@@ -192,12 +147,77 @@ impl<'a> HeaderDownloader<'a> {
             cursor_canonical.put(number, hash).unwrap();
             cursor_td.put((number, hash), td).unwrap();
         });
+        Ok(())
+    }
+
+    pub async fn evaluate_chain_tip(&mut self) -> anyhow::Result<()> {
+        let mut stream = self.sentry.recv().await?;
+        let mut ticker = tokio::time::interval(Duration::from_secs(15));
+
+        while !self.found_tip {
+            select! {
+                _ = ticker.tick().fuse() => {
+                    let _ = self.sentry.ping().await;
+                    info!("Ping sent {:#?}", self.childs_table);
+                    if { self.try_find_tip().await? } { break; }
+                }
+                msg = stream.next().fuse() => {
+                    if msg.is_none() { continue; }
+                    match msg.unwrap().msg {
+                        Message::NewBlockHashes(v) => {
+                            if !v.0.is_empty() && !self.seen_announces.contains(&v.0.last().unwrap().hash)
+                            && v.0.last().unwrap().number >= self.height {
+                                let block = v.0.last().unwrap();
+                                self.seen_announces.insert(block.hash);
+                                self.sentry.send_header_request(HeaderRequest {
+                                    start: block.hash.into(),
+                                    limit: 1,
+                                    ..Default::default()
+                                }).await?;
+                            }
+                        },
+                        Message::BlockHeaders(v) =>  {
+                            if v.headers.len() == 1 && v.headers[0].number > self.sentry.last_ping() {
+                                let header = &v.headers[0];
+                                let hash = header.hash();
+
+                                self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
+                                self.blocks_table.insert(hash, (header.number, None));
+                                self.sentry.send_header_request(HeaderRequest {
+                                    start: hash.into(),
+                                    limit: 1,
+                                    skip: 1,
+                                    ..Default::default()
+                                }).await?;
+
+                                if self.height < header.number { self.height = header.number; }
+                            }
+                        },
+                        Message::NewBlock(v) => {
+                            let (hash, number, parent_hash)
+                                = (v.block.header.hash(), v.block.header.number, v.block.header.parent_hash);
+
+                            self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
+                            self.blocks_table.insert(hash, (number, Some(v.total_difficulty)));
+                            self.sentry.send_header_request(HeaderRequest {
+                                start: hash.into(),
+                                limit: 1,
+                                skip: 1,
+                                ..Default::default()
+                            }).await?;
+                            if self.height < number { self.height = number; }
+                        }
+                        _ => continue,
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
 
     /// Finds chain tip if it's possible at the given moment.
-    pub async fn try_find_tip(&'_ mut self) -> anyhow::Result<bool> {
+    pub async fn try_find_tip(&mut self) -> anyhow::Result<bool> {
         let mut canonical = Vec::new();
         for mut parent in self.childs_table.keys().into_iter().cloned() {
             let mut chain = vec![parent];
@@ -253,11 +273,10 @@ impl<'a> HeaderDownloader<'a> {
     }
 
     #[allow(unreachable_code)]
-    pub async fn prepare_requests(
-        &'_ mut self,
-        mut stream: CoordinatorStream,
-    ) -> anyhow::Result<()> {
+    pub async fn prepare_requests(&mut self) -> anyhow::Result<()> {
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
+        let mut stream = self.sentry.recv().await?;
+
         let (height, td) = self.blocks_table.get(&self.canonical_marker).unwrap();
         if td.is_some() {
             let _ = self
@@ -294,5 +313,47 @@ impl<'a> HeaderDownloader<'a> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn it_works() {
+        use std::{path::PathBuf, sync::Arc};
+
+        use crate::{
+            models::BlockNumber,
+            sentry::chain_config::ChainsConfig,
+            sentry2::{downloader::HeaderDownloader, SentryClient},
+        };
+        use anyhow::Context;
+        use tracing::{info, Level};
+
+        tracing_subscriber::fmt()
+            .with_max_level(Level::DEBUG)
+            .init();
+
+        let chain_config = ChainsConfig::default().get("mainnet").unwrap();
+        let sentry = SentryClient::connect("http://localhost:8000")
+            .await
+            .unwrap();
+        std::fs::create_dir_all(PathBuf::from("./db")).unwrap();
+        std::fs::create_dir_all(PathBuf::from("./db/temp")).unwrap();
+        let db = crate::kv::new_database(PathBuf::from("./db").as_path()).unwrap();
+        let txn = db.begin_mutable().unwrap();
+        let etl_temp_dir = Arc::new(
+            tempfile::tempdir_in("./db/temp")
+                .context("failed to create ETL temp dir")
+                .unwrap(),
+        );
+
+        crate::genesis::initialize_genesis(&txn, &*etl_temp_dir, chain_config.chain_spec().clone())
+            .unwrap();
+        txn.commit().unwrap();
+
+        info!("DB initialized");
+        let mut hd = HeaderDownloader::new(sentry, db.begin().unwrap(), chain_config).unwrap();
+        hd.runtime(&db).await;
     }
 }

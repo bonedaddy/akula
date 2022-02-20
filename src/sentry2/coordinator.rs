@@ -33,7 +33,6 @@ pub type SentryClient = grpc_sentry::sentry_client::SentryClient<tonic::transpor
 #[derive(Clone)]
 pub struct Coordinator {
     pub sentries: Vec<SentryClient>,
-    //pub hd: Arc<HeaderDownloader>,
     pub genesis_hash: H256,
     network_id: u64,
     hard_forks: Vec<u64>,
@@ -42,11 +41,7 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
-    pub fn new<T: Into<SentryPool>>(
-        sentry: T,
-        chain_config: ChainConfig,
-        block_height: u64,
-    ) -> Self {
+    pub fn new<T: Into<SentryPool>>(sentry: T, chain_config: ChainConfig, status: Status) -> Self {
         let genesis_hash = chain_config.genesis_block_hash();
         let network_id = chain_config.network_id().0;
         let hard_forks = chain_config
@@ -55,14 +50,6 @@ impl Coordinator {
             .into_iter()
             .map(|v| v.0)
             .collect::<Vec<_>>();
-        let total_difficulty: H256 = chain_config
-            .chain_spec()
-            .genesis
-            .seal
-            .difficulty()
-            .to_be_bytes()
-            .into();
-        let status = Status::new(block_height, genesis_hash, total_difficulty);
         Self {
             sentries: sentry.into().0,
             status: Arc::new(AtomicStatus::new(status)),
