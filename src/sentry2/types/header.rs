@@ -4,7 +4,7 @@ use crate::{
 };
 use rlp_derive::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct HeaderRequest {
     pub start: BlockId,
     pub limit: u64,

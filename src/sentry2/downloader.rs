@@ -1,10 +1,3 @@
-#![allow(
-    unused_mut,
-    unused,
-    unused_attributes,
-    unused_variables,
-    unused_imports
-)]
 use crate::{
     kv::{
         mdbx::{MdbxEnvironment, MdbxTransaction},
@@ -14,10 +7,10 @@ use crate::{
     sentry::chain_config::ChainConfig,
     sentry2::{
         types::{HeaderRequest, Message, Status},
-        Coordinator, CoordinatorStream, SentryCoordinator, SentryPool,
+        Coordinator, SentryCoordinator, SentryPool,
     },
 };
-use futures_util::{select, FutureExt, StreamExt};
+use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::{HashMap, HashSet};
 use hashlink::LinkedHashSet;
 use itertools::Itertools;
@@ -76,6 +69,7 @@ impl HeaderDownloader {
     }
 
     /// Runtime of the downloader.
+    #[allow(unreachable_code)]
     pub async fn runtime<E: EnvironmentKind>(
         &mut self,
         db: &'_ MdbxEnvironment<E>,
@@ -99,14 +93,46 @@ impl HeaderDownloader {
 
         let mut stream = self.sentry.recv().await?;
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
+        let requests = if !can_deal_in_one_step {
+            let mut reqs = LinkedHashSet::new();
+            let req = HeaderRequest {
+                start: hash.into(),
+                limit: 1024,
+                skip: 0,
+                reverse: false,
+            };
+            reqs.insert(req);
 
-        loop {
+            (0..87).for_each(|i| {
+                reqs.insert(HeaderRequest {
+                    start: (block_number + i * 1024).into(),
+                    limit: 1024,
+                    skip: 0,
+                    reverse: false,
+                });
+            });
+            reqs
+        } else {
+            todo!()
+        };
+        while !requests.is_empty() {
             select! {
                 _ = ticker.tick().fuse() => {
-
+                    let _ = requests.iter().take(8).cloned().map(|req| {
+                        let sentry = self.sentry.clone();
+                        tokio::spawn(async move {
+                            let _ = sentry.send_header_request(req).await;
+                        })
+                    }).collect::<FuturesUnordered<_>>().map(|_| ()).collect::<()>();
                 }
                 msg = stream.next().fuse() => {
-
+                    if msg.is_none() { continue; }
+                    match msg.unwrap().msg {
+                        Message::BlockHeaders(v) => {
+                            info!("Received {} headers", v.headers.len());
+                        }
+                        _ => continue,
+                    }
                 }
             }
         }
@@ -159,7 +185,8 @@ impl HeaderDownloader {
                 _ = ticker.tick().fuse() => {
                     let _ = self.sentry.ping().await;
                     info!("Ping sent {:#?}", self.childs_table);
-                    if { self.try_find_tip().await? } { break; }
+
+                    if self.try_find_tip().await? { break; }
                 }
                 msg = stream.next().fuse() => {
                     if msg.is_none() { continue; }
@@ -247,6 +274,7 @@ impl HeaderDownloader {
                             }
                         }
                     }
+                    break;
                 }
             }
             if chain.len() > canonical.len() {
@@ -330,9 +358,7 @@ mod tests {
         use anyhow::Context;
         use tracing::{info, Level};
 
-        tracing_subscriber::fmt()
-            .with_max_level(Level::DEBUG)
-            .init();
+        tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
         let chain_config = ChainsConfig::default().get("mainnet").unwrap();
         let sentry = SentryClient::connect("http://localhost:8000")
