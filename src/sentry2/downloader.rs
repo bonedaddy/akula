@@ -11,15 +11,22 @@ use crate::{
     },
 };
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
-use hashbrown::{HashMap, HashSet};
-use hashlink::LinkedHashSet;
-use itertools::Itertools;
+use hashbrown::HashMap;
+use hashlink::{LinkedHashMap, LinkedHashSet};
 use mdbx::{EnvironmentKind, RO, RW};
-use rayon::slice::ParallelSliceMut;
-use std::{sync::Arc, time::Duration, vec::Drain};
+use rayon::{
+    iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
+use std::{
+    sync::{atomic::AtomicUsize, Arc},
+    time::Duration,
+};
 use tracing::info;
 
-const BATCH_SIZE: usize = 89856;
+const BATCH_SIZE: usize = 3 << 15;
+const CHUNK_SIZE: usize = 1 << 10;
+
 pub struct HeaderDownloader {
     /// Sentry connector.
     pub sentry: Arc<Coordinator>,
@@ -28,7 +35,7 @@ pub struct HeaderDownloader {
     /// The set of newly seen hashes.
     pub seen_announces: LinkedHashSet<H256>,
     /// Mapping from the parent hash to the set of children hashes.
-    pub childs_table: HashMap<H256, HashSet<H256>>,
+    pub childs_table: LinkedHashMap<H256, LinkedHashSet<H256>>,
     /// Mapping from the block hash to it's number and optionally total difficulty.
     pub blocks_table: HashMap<H256, (BlockNumber, Option<u128>)>,
     /// The hash known to belong to the canonical chain(defaults to our latest checkpoint or
@@ -45,11 +52,11 @@ impl HeaderDownloader {
         chain_config: ChainConfig,
     ) -> anyhow::Result<Self> {
         let block = txn
-            .cursor(tables::HeaderNumber)?
+            .cursor(tables::CanonicalHeader)?
             .last()?
-            .unwrap_or_else(|| (chain_config.genesis_block_hash(), BlockNumber(0)));
+            .unwrap_or((0.into(), chain_config.genesis_block_hash()));
         let td = txn
-            .get(tables::HeadersTotalDifficulty, (block.1, block.0))?
+            .get(tables::HeadersTotalDifficulty, block)?
             .unwrap_or_else(|| chain_config.chain_spec().genesis.seal.difficulty())
             .to_be_bytes()
             .into();
@@ -57,68 +64,122 @@ impl HeaderDownloader {
             sentry: Arc::new(Coordinator::new(
                 conn,
                 chain_config,
-                Status::new(block.1 .0, block.0, td),
+                Status::new(block.0 .0, block.1, td),
             )),
-            height: block.1,
+            height: block.0,
             seen_announces: LinkedHashSet::new(),
-            childs_table: HashMap::new(),
+            childs_table: LinkedHashMap::new(),
             blocks_table: HashMap::new(),
-            canonical_marker: block.0,
+            canonical_marker: block.1,
             found_tip: false,
         })
     }
 
-    /// Runtime of the downloader.
-    #[allow(unreachable_code)]
     pub async fn runtime<E: EnvironmentKind>(
         &mut self,
         db: &'_ MdbxEnvironment<E>,
     ) -> anyhow::Result<()> {
         self.evaluate_chain_tip().await?;
-        let (block_number, hash) = db
+        while db.begin()?.cursor(tables::CanonicalHeader)?.last().map_or(
+            BlockNumber(0),
+            |v| match v {
+                Some(b) => b.0,
+                _ => BlockNumber(0),
+            },
+        ) < self.height
+        {
+            self.step(db).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Runs next step on the finite time.
+    pub async fn step<E: EnvironmentKind>(
+        &mut self,
+        db: &'_ MdbxEnvironment<E>,
+    ) -> anyhow::Result<()> {
+        if !self.found_tip {
+            self.evaluate_chain_tip().await?;
+        }
+        let (mut block_number, mut hash) = db
             .begin()?
-            .cursor(tables::HeaderNumber)?
+            .cursor(tables::CanonicalHeader)?
             .last()?
-            .map_or((BlockNumber(0), self.sentry.genesis_hash), |(h, v)| (v, h));
-        let can_deal_in_one_step = ((if self.height.0 >= BATCH_SIZE as u64 {
-            self.height - BATCH_SIZE as u64
-        } else {
-            self.height
-        }) - block_number.0)
-            <= BlockNumber(BATCH_SIZE as u64);
+            .unwrap_or((BlockNumber(0), self.sentry.genesis_hash));
         info!(
-            "Starting header downloader with height: {}, can_deal_in_one_step: {}",
-            self.height, can_deal_in_one_step
+            "Starting header downloader with height: {:#?},  current height: {:#?}",
+            self.height, block_number
+        );
+
+        let batch_size = if self.height - block_number <= BlockNumber(BATCH_SIZE as u64) {
+            self.height - block_number
+        } else {
+            BlockNumber(BATCH_SIZE as u64)
+        };
+
+        let mut headers = Vec::<BlockHeader>::with_capacity(batch_size.0 as usize);
+        while headers.len() < batch_size.0 as usize {
+            if !headers.is_empty() {
+                let last = headers.last().unwrap();
+                (block_number, hash) = (last.number, last.hash());
+            }
+
+            headers.extend(
+                self.collect_headers(block_number, hash, block_number + batch_size)
+                    .await?,
+            );
+        }
+
+        info!(
+            "Headers collected: {:#?}, from: {:?}, to: {:?}",
+            headers.len(),
+            block_number,
+            block_number + batch_size
+        );
+
+        debug_assert!(headers.len() == batch_size.0 as usize);
+        self.flush(db.begin_mutable()?, headers)?;
+
+        Ok(())
+    }
+
+    async fn collect_headers(
+        &self,
+        start: BlockNumber,
+        hash: H256,
+        end: BlockNumber,
+    ) -> anyhow::Result<Vec<BlockHeader>> {
+        let mut requests = (start..end)
+            .step_by(CHUNK_SIZE)
+            .map(|i| {
+                (
+                    i,
+                    HeaderRequest {
+                        start: i.into(),
+                        limit: CHUNK_SIZE as u64,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect::<LinkedHashMap<_, _>>();
+        requests.insert(
+            start,
+            HeaderRequest {
+                start: hash.into(),
+                limit: CHUNK_SIZE as u64,
+                ..Default::default()
+            },
         );
 
         let mut stream = self.sentry.recv().await?;
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
-        let requests = if !can_deal_in_one_step {
-            let mut reqs = LinkedHashSet::new();
-            let req = HeaderRequest {
-                start: hash.into(),
-                limit: 1024,
-                skip: 0,
-                reverse: false,
-            };
-            reqs.insert(req);
+        let mut headers = Vec::with_capacity(BATCH_SIZE);
 
-            (0..87).for_each(|i| {
-                reqs.insert(HeaderRequest {
-                    start: (block_number + i * 1024).into(),
-                    limit: 1024,
-                    skip: 0,
-                    reverse: false,
-                });
-            });
-            reqs
-        } else {
-            todo!()
-        };
         while !requests.is_empty() {
             select! {
                 _ = ticker.tick().fuse() => {
-                    let _ = requests.iter().take(8).cloned().map(|req| {
+                    let _ = requests.clone().into_iter().map(|(_,req)| {
                         let sentry = self.sentry.clone();
                         tokio::spawn(async move {
                             let _ = sentry.send_header_request(req).await;
@@ -129,7 +190,11 @@ impl HeaderDownloader {
                     if msg.is_none() { continue; }
                     match msg.unwrap().msg {
                         Message::BlockHeaders(v) => {
-                            info!("Received {} headers", v.headers.len());
+                            if v.headers.len() == CHUNK_SIZE && requests.contains_key(&v.headers[0].number)
+                            && v.headers.last().unwrap().number+1 == v.headers[0].number + (CHUNK_SIZE as u64) {
+                                debug_assert!(requests.remove(&v.headers[0].number).is_some());
+                                headers.extend(v.headers.into_iter());
+                            }
                         }
                         _ => continue,
                     }
@@ -137,32 +202,54 @@ impl HeaderDownloader {
             }
         }
 
-        Ok(())
+        Self::verify_chunks(&mut headers);
+        Ok(headers)
     }
 
-    /// Runs next step on the finite time.
-    pub async fn step<E: EnvironmentKind>(
+    fn verify_chunks(headers: &mut Vec<BlockHeader>) {
+        headers.par_sort_unstable_by_key(|v| v.number);
+        let valid_till = AtomicUsize::new(0);
+        headers.par_iter().enumerate().for_each(|(i, header)| {
+            if i > 0
+                && (header.number != headers[i - 1].number + 1
+                    || header.parent_hash != headers[i - 1].hash())
+                && valid_till.load(std::sync::atomic::Ordering::SeqCst) > i
+            {
+                valid_till.store(i - 1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+
+        if valid_till.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+            headers.truncate(valid_till.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        println!(
+            "{:#?} {:#?}",
+            headers.len(),
+            valid_till.load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+    /// Flushes step progress.
+    fn flush<E: EnvironmentKind>(
         &mut self,
         txn: MdbxTransaction<'_, RW, E>,
-    ) -> anyhow::Result<()> {
-        info!("Starting downloader step");
-        txn.commit()?;
-        Ok(())
-    }
-
-    /// Flushes step progress.
-    pub async fn flush<E: EnvironmentKind>(
-        &mut self,
-        txn: &'_ MdbxTransaction<'_, RW, E>,
-        headers: Drain<'_, BlockHeader>,
+        headers: Vec<BlockHeader>,
     ) -> anyhow::Result<()> {
         let mut cursor_header_num = txn.cursor(tables::HeaderNumber)?;
         let mut cursor_header = txn.cursor(tables::Header)?;
         let mut cursor_canonical = txn.cursor(tables::CanonicalHeader)?;
         let mut cursor_td = txn.cursor(tables::HeadersTotalDifficulty)?;
-        let mut headers = headers.collect_vec();
-        let mut td = 0u128.into();
-        headers.par_sort_unstable_by_key(|header| header.number);
+        let mut td = txn
+            .get(
+                tables::HeadersTotalDifficulty,
+                cursor_canonical
+                    .last()
+                    .map_or((0.into(), self.sentry.genesis_hash), |v| match v {
+                        Some((b, h)) => (b, h),
+                        None => (0.into(), self.sentry.genesis_hash),
+                    }),
+            )?
+            .unwrap_or_default();
+
         headers.into_iter().for_each(|header| {
             let hash = header.hash();
             let number = header.number;
@@ -173,13 +260,14 @@ impl HeaderDownloader {
             cursor_canonical.put(number, hash).unwrap();
             cursor_td.put((number, hash), td).unwrap();
         });
+
+        txn.commit()?;
         Ok(())
     }
 
-    pub async fn evaluate_chain_tip(&mut self) -> anyhow::Result<()> {
+    async fn evaluate_chain_tip(&mut self) -> anyhow::Result<()> {
         let mut stream = self.sentry.recv().await?;
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
-
         while !self.found_tip {
             select! {
                 _ = ticker.tick().fuse() => {
@@ -208,7 +296,7 @@ impl HeaderDownloader {
                                 let header = &v.headers[0];
                                 let hash = header.hash();
 
-                                self.childs_table.entry(header.parent_hash).or_insert_with(HashSet::new).insert(hash);
+                                self.childs_table.entry(header.parent_hash).or_insert_with(LinkedHashSet::new).insert(hash);
                                 self.blocks_table.insert(hash, (header.number, None));
                                 self.sentry.send_header_request(HeaderRequest {
                                     start: hash.into(),
@@ -224,7 +312,7 @@ impl HeaderDownloader {
                             let (hash, number, parent_hash)
                                 = (v.block.header.hash(), v.block.header.number, v.block.header.parent_hash);
 
-                            self.childs_table.entry(parent_hash).or_insert_with(HashSet::new).insert(hash);
+                            self.childs_table.entry(parent_hash).or_insert_with(LinkedHashSet::new).insert(hash);
                             self.blocks_table.insert(hash, (number, Some(v.total_difficulty)));
                             self.sentry.send_header_request(HeaderRequest {
                                 start: hash.into(),
@@ -244,7 +332,7 @@ impl HeaderDownloader {
     }
 
     /// Finds chain tip if it's possible at the given moment.
-    pub async fn try_find_tip(&mut self) -> anyhow::Result<bool> {
+    async fn try_find_tip(&mut self) -> anyhow::Result<bool> {
         let mut canonical = Vec::new();
         for mut parent in self.childs_table.keys().into_iter().cloned() {
             let mut chain = vec![parent];
@@ -285,101 +373,33 @@ impl HeaderDownloader {
             info!("Successfully found canonical chain: {:#?}", canonical);
             self.canonical_marker = *canonical.last().unwrap();
             self.found_tip = true;
-            return Ok(true);
-        } else if !canonical.is_empty() {
-            self.sentry
-                .send_header_request(HeaderRequest {
-                    start: (*canonical.last().unwrap()).into(),
-                    limit: 1,
-                    skip: 1,
-                    ..Default::default()
-                })
-                .await?;
-        }
-
-        Ok(false)
-    }
-
-    #[allow(unreachable_code)]
-    pub async fn prepare_requests(&mut self) -> anyhow::Result<()> {
-        let mut ticker = tokio::time::interval(Duration::from_secs(15));
-        let mut stream = self.sentry.recv().await?;
-
-        let (height, td) = self.blocks_table.get(&self.canonical_marker).unwrap();
-        if td.is_some() {
+            Ok(true)
+        } else {
             let _ = self
-                .sentry
-                .update_head(*height, self.canonical_marker, td.unwrap().into())
-                .await;
-        };
-        let mut hashes = HashSet::new();
-        hashes.insert(self.canonical_marker);
-        let mut pending_request = HeaderRequest::new(self.canonical_marker.into(), 576, 575, true);
-        loop {
-            select! {
-                _ = ticker.tick().fuse() => {
-                    self.sentry.send_header_request(pending_request.clone()).await?;
-                    info!("Hashes {:#?}", hashes);
-                }
-                msg = stream.next().fuse() => {
-                    match msg.unwrap().msg {
-                        Message::BlockHeaders(value) => {
-                            info!("Headers {:#?}", &value);
-                            if value.headers.len() == 1 && value.headers.last().unwrap().number > self.sentry.last_ping() {
-                                let header = value.headers.last().unwrap();
-                                let hash = header.hash();
-                                if hashes.insert(hash) {
-                                    continue;
-                                }
-                                pending_request = HeaderRequest::new(hash.into(), 576, 575, true);
-                            }
-                        }
-                        _ => continue,
-                    }
-                }
-            }
+                .childs_table
+                .clone()
+                .into_iter()
+                .flat_map(|(k, mut v)| {
+                    v.insert(k);
+                    v
+                })
+                .map(|v| {
+                    let sentry = self.sentry.clone();
+                    tokio::spawn(async move {
+                        let _ = sentry
+                            .send_header_request(HeaderRequest {
+                                start: v.into(),
+                                limit: 1,
+                                skip: 1,
+                                ..Default::default()
+                            })
+                            .await;
+                    })
+                })
+                .collect::<FuturesUnordered<_>>()
+                .map(|_| ())
+                .collect::<()>();
+            Ok(false)
         }
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[tokio::test]
-    async fn it_works() {
-        use std::{path::PathBuf, sync::Arc};
-
-        use crate::{
-            models::BlockNumber,
-            sentry::chain_config::ChainsConfig,
-            sentry2::{downloader::HeaderDownloader, SentryClient},
-        };
-        use anyhow::Context;
-        use tracing::{info, Level};
-
-        tracing_subscriber::fmt().with_max_level(Level::INFO).init();
-
-        let chain_config = ChainsConfig::default().get("mainnet").unwrap();
-        let sentry = SentryClient::connect("http://localhost:8000")
-            .await
-            .unwrap();
-        std::fs::create_dir_all(PathBuf::from("./db")).unwrap();
-        std::fs::create_dir_all(PathBuf::from("./db/temp")).unwrap();
-        let db = crate::kv::new_database(PathBuf::from("./db").as_path()).unwrap();
-        let txn = db.begin_mutable().unwrap();
-        let etl_temp_dir = Arc::new(
-            tempfile::tempdir_in("./db/temp")
-                .context("failed to create ETL temp dir")
-                .unwrap(),
-        );
-
-        crate::genesis::initialize_genesis(&txn, &*etl_temp_dir, chain_config.chain_spec().clone())
-            .unwrap();
-        txn.commit().unwrap();
-
-        info!("DB initialized");
-        let mut hd = HeaderDownloader::new(sentry, db.begin().unwrap(), chain_config).unwrap();
-        hd.runtime(&db).await;
     }
 }
