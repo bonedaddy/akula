@@ -19,7 +19,8 @@
     const_fn_trait_bound,
     const_precise_live_drops,
     const_result,
-    const_convert
+    const_convert,
+    entry_insert
 )]
 #![recursion_limit = "256"]
 #![allow(

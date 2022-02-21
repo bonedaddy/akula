@@ -142,8 +142,14 @@ impl HeaderDownloader {
             }
 
             headers.extend(
-                self.collect_headers(stream, block_number, hash, block_number + batch_size)
-                    .await?,
+                self.collect_headers(
+                    stream,
+                    block_number,
+                    hash,
+                    block_number + batch_size,
+                    batch_size.0 as usize,
+                )
+                .await?,
             );
         }
 
@@ -162,6 +168,7 @@ impl HeaderDownloader {
         start: BlockNumber,
         hash: H256,
         end: BlockNumber,
+        batch_size: usize,
     ) -> anyhow::Result<Vec<BlockHeader>> {
         let mut requests = (start..end)
             .step_by(CHUNK_SIZE)
@@ -201,7 +208,9 @@ impl HeaderDownloader {
                     if msg.is_none() { continue; }
                     match msg.unwrap().msg {
                         Message::BlockHeaders(v) => {
-                            if v.headers.len() == CHUNK_SIZE && requests.contains_key(&v.headers[0].number)
+                            if !v.headers.is_empty() && (v.headers.len() == CHUNK_SIZE
+                            || v.headers.len() == batch_size%CHUNK_SIZE)
+                            && requests.contains_key(&v.headers[0].number)
                             && v.headers.last().unwrap().number+1 == v.headers[0].number + (CHUNK_SIZE as u64) {
                                 debug_assert!(requests.remove(&v.headers[0].number).is_some());
                                 headers.extend(v.headers.into_iter());
