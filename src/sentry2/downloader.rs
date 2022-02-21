@@ -22,7 +22,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
     time::Duration,
 };
-use tracing::info;
+use tracing::{info, instrument};
 
 use super::CoordinatorStream;
 
@@ -101,6 +101,7 @@ impl HeaderDownloader {
     }
 
     /// Runs next step on the finite time.
+    #[instrument(name = "HeaderDownloader::step", skip(self, db, stream))]
     pub async fn step<E: EnvironmentKind>(
         &mut self,
         db: &'_ MdbxEnvironment<E>,
@@ -123,10 +124,7 @@ impl HeaderDownloader {
             .cursor(tables::CanonicalHeader)?
             .last()?
             .unwrap_or((BlockNumber(0), self.sentry.genesis_hash));
-        info!(
-            "Starting header downloader with height: {:#?},  current height: {:#?}",
-            self.height, block_number
-        );
+        info!("Progress: {:?} of {:?}", block_number, self.height);
 
         let batch_size = if self.height - block_number <= BlockNumber(BATCH_SIZE as u64) {
             self.height - block_number
@@ -146,16 +144,12 @@ impl HeaderDownloader {
             );
         }
 
-        info!(
-            "Headers collected: {:#?}, from: {:?}, to: {:?}",
-            headers.len(),
-            block_number,
-            block_number + batch_size
-        );
-
         debug_assert!(headers.len() == batch_size.0 as usize);
         self.flush(db.begin_mutable()?, headers)?;
-
+        info!(
+            "Successfully committed batch of {} headers",
+            batch_size.0 as usize
+        );
         Ok(())
     }
 
@@ -223,33 +217,39 @@ impl HeaderDownloader {
         headers.par_sort_unstable_by_key(|v| v.number);
 
         let valid_till = AtomicUsize::new(0);
-        headers.par_iter().enumerate().for_each(|(i, header)| {
-            if i > 0
-                && (header.number != headers[i - 1].number + 1
-                    || header.parent_hash != headers[i - 1].hash())
-            {
-                let mut value = valid_till.load(std::sync::atomic::Ordering::SeqCst);
-                while i < value {
-                    if valid_till.compare_exchange(
-                        value,
-                        i,
-                        std::sync::atomic::Ordering::SeqCst,
-                        std::sync::atomic::Ordering::SeqCst,
-                    ) == Ok(value)
-                    {
-                        break;
-                    } else {
-                        value = valid_till.load(std::sync::atomic::Ordering::SeqCst);
+        headers
+            .par_iter()
+            .enumerate()
+            .skip(1)
+            .for_each(|(i, header)| {
+                if header.number != headers[i - 1].number + 1
+                    || header.parent_hash != headers[i - 1].hash()
+                    || header.timestamp < headers[i - 1].timestamp
+                {
+                    let mut value = valid_till.load(std::sync::atomic::Ordering::SeqCst);
+                    while i < value {
+                        // there's window in between, because value can be changed since we read it,
+                        // so we need to make sure that we're changing the right value,
+                        // and if not, reload it.
+                        if valid_till.compare_exchange(
+                            value,
+                            i,
+                            std::sync::atomic::Ordering::SeqCst,
+                            std::sync::atomic::Ordering::SeqCst,
+                        ) == Ok(value)
+                        {
+                            break;
+                        } else {
+                            value = valid_till.load(std::sync::atomic::Ordering::SeqCst);
+                        }
                     }
                 }
-            }
-        });
+            });
 
         let value = valid_till.load(std::sync::atomic::Ordering::SeqCst) as usize;
         if value != 0 {
             headers.truncate(value - 1);
         }
-        println!("{:#?} {:#?}", headers.len(), value,);
     }
 
     /// Flushes step progress.
@@ -295,8 +295,6 @@ impl HeaderDownloader {
             select! {
                 _ = ticker.tick().fuse() => {
                     let _ = self.sentry.ping().await;
-                    info!("Ping sent {:#?}", self.childs_table);
-
                     if self.try_find_tip().await? { break; }
                 }
                 msg = stream.next().fuse() => {
