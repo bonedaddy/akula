@@ -201,7 +201,6 @@ impl HeaderDownloader {
                 }
             }
         }
-
         Self::verify_chunks(&mut headers);
         Ok(headers)
     }
@@ -210,17 +209,16 @@ impl HeaderDownloader {
         headers.par_sort_unstable_by_key(|v| v.number);
 
         let valid_till = AtomicUsize::new(0);
-
         headers.par_iter().enumerate().for_each(|(i, header)| {
             if i > 0
                 && (header.number != headers[i - 1].number + 1
                     || header.parent_hash != headers[i - 1].hash())
             {
                 let mut value = valid_till.load(std::sync::atomic::Ordering::SeqCst);
-                while (i - 1) < value {
+                while i < value {
                     if valid_till.compare_exchange(
                         value,
-                        i - 1,
+                        i,
                         std::sync::atomic::Ordering::SeqCst,
                         std::sync::atomic::Ordering::SeqCst,
                     ) == Ok(value)
@@ -233,14 +231,11 @@ impl HeaderDownloader {
             }
         });
 
-        if valid_till.load(std::sync::atomic::Ordering::SeqCst) != 0 {
-            headers.truncate(valid_till.load(std::sync::atomic::Ordering::SeqCst));
+        let value = valid_till.load(std::sync::atomic::Ordering::SeqCst) as usize;
+        if value != 0 {
+            headers.truncate(value - 1);
         }
-        println!(
-            "{:#?} {:#?}",
-            headers.len(),
-            valid_till.load(std::sync::atomic::Ordering::SeqCst)
-        );
+        println!("{:#?} {:#?}", headers.len(), value,);
     }
 
     /// Flushes step progress.
