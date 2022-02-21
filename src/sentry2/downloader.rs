@@ -39,6 +39,8 @@ pub struct HeaderDownloader {
     pub seen_announces: LinkedHashSet<H256>,
     /// Mapping from the parent hash to the set of children hashes.
     pub childs_table: LinkedHashMap<H256, LinkedHashSet<H256>>,
+    /// Mapping from the child hash to the parent hash.
+    pub parents_table: HashMap<H256, H256>,
     /// Mapping from the block hash to it's number and optionally total difficulty.
     pub blocks_table: HashMap<H256, (BlockNumber, Option<u128>)>,
     /// The hash known to belong to the canonical chain(defaults to our latest checkpoint or
@@ -72,6 +74,7 @@ impl HeaderDownloader {
             height: block.0,
             seen_announces: LinkedHashSet::new(),
             childs_table: LinkedHashMap::new(),
+            parents_table: HashMap::new(),
             blocks_table: HashMap::new(),
             canonical_marker: block.1,
             found_tip: false,
@@ -321,6 +324,7 @@ impl HeaderDownloader {
                                 let header = &v.headers[0];
                                 let hash = header.hash();
 
+                                self.parents_table.insert(hash, header.parent_hash);
                                 self.childs_table.entry(header.parent_hash).or_insert_with(LinkedHashSet::new).insert(hash);
                                 self.blocks_table.insert(hash, (header.number, None));
                                 self.sentry.send_header_request(HeaderRequest {
@@ -337,6 +341,7 @@ impl HeaderDownloader {
                             let (hash, number, parent_hash)
                                 = (v.block.header.hash(), v.block.header.number, v.block.header.parent_hash);
 
+                            self.parents_table.insert(hash, parent_hash);
                             self.childs_table.entry(parent_hash).or_insert_with(LinkedHashSet::new).insert(hash);
                             self.blocks_table.insert(hash, (number, Some(v.total_difficulty)));
                             self.sentry.send_header_request(HeaderRequest {
@@ -373,11 +378,12 @@ impl HeaderDownloader {
             queue.push_back(tip);
 
             while let Some(hash) = queue.pop_front() {
-                for (parent, childs) in self.childs_table.iter() {
-                    if childs.contains(&hash) {
-                        path.insert(*parent);
-                        queue.push_back(*parent);
+                match self.parents_table.get(&hash) {
+                    Some(v) => {
+                        path.insert(*v);
+                        queue.push_back(*v);
                     }
+                    None => break,
                 }
             }
             if path.len() >= longest_path.len() {
