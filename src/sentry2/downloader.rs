@@ -24,6 +24,8 @@ use std::{
 };
 use tracing::info;
 
+use super::CoordinatorStream;
+
 const BATCH_SIZE: usize = 3 << 15;
 const CHUNK_SIZE: usize = 1 << 10;
 
@@ -79,7 +81,11 @@ impl HeaderDownloader {
         &mut self,
         db: &'_ MdbxEnvironment<E>,
     ) -> anyhow::Result<()> {
-        self.evaluate_chain_tip().await?;
+        let mut stream = self.sentry.recv().await?;
+        if !self.found_tip {
+            self.evaluate_chain_tip(&mut stream).await?;
+        }
+
         while db.begin()?.cursor(tables::CanonicalHeader)?.last().map_or(
             BlockNumber(0),
             |v| match v {
@@ -88,7 +94,7 @@ impl HeaderDownloader {
             },
         ) < self.height
         {
-            self.step(db).await?;
+            self.step(db, Some(&mut stream)).await?;
         }
 
         Ok(())
@@ -98,9 +104,19 @@ impl HeaderDownloader {
     pub async fn step<E: EnvironmentKind>(
         &mut self,
         db: &'_ MdbxEnvironment<E>,
+        stream: Option<&mut CoordinatorStream>,
     ) -> anyhow::Result<()> {
+        let mut sentry_stream = self.sentry.recv().await?;
+        let stream = match stream {
+            Some(stream) => {
+                drop(sentry_stream);
+                stream
+            }
+            None => &mut sentry_stream,
+        };
+
         if !self.found_tip {
-            self.evaluate_chain_tip().await?;
+            self.evaluate_chain_tip(stream).await?;
         }
         let (mut block_number, mut hash) = db
             .begin()?
@@ -117,7 +133,6 @@ impl HeaderDownloader {
         } else {
             BlockNumber(BATCH_SIZE as u64)
         };
-
         let mut headers = Vec::<BlockHeader>::with_capacity(batch_size.0 as usize);
         while headers.len() < batch_size.0 as usize {
             if !headers.is_empty() {
@@ -126,7 +141,7 @@ impl HeaderDownloader {
             }
 
             headers.extend(
-                self.collect_headers(block_number, hash, block_number + batch_size)
+                self.collect_headers(stream, block_number, hash, block_number + batch_size)
                     .await?,
             );
         }
@@ -146,6 +161,7 @@ impl HeaderDownloader {
 
     async fn collect_headers(
         &self,
+        stream: &mut CoordinatorStream,
         start: BlockNumber,
         hash: H256,
         end: BlockNumber,
@@ -172,10 +188,8 @@ impl HeaderDownloader {
             },
         );
 
-        let mut stream = self.sentry.recv().await?;
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
         let mut headers = Vec::with_capacity(BATCH_SIZE);
-
         while !requests.is_empty() {
             select! {
                 _ = ticker.tick().fuse() => {
@@ -275,8 +289,7 @@ impl HeaderDownloader {
         Ok(())
     }
 
-    async fn evaluate_chain_tip(&mut self) -> anyhow::Result<()> {
-        let mut stream = self.sentry.recv().await?;
+    async fn evaluate_chain_tip(&mut self, stream: &mut CoordinatorStream) -> anyhow::Result<()> {
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
         while !self.found_tip {
             select! {
