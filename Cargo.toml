@@ -99,6 +99,7 @@ async-channel = { git = "https://github.com/smol-rs/async-channel" }
 hashbrown = "0.12.0"
 hashlink = "0.7.0"
 fastrand = "1.7.0"
+lockfree = { git = "https://github.com/gelfand/lockfree-fork" }
 
 [build-dependencies]
 anyhow = "1.0.54"
