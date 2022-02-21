@@ -130,6 +130,10 @@ name = "akula-toolbox"
 path = "bin/consensus-tests.rs"
 name = "consensus-tests"
 
+[[bin]]
+path = "bin/downloader.rs"
+name = "downloader"
+
 [profile.production]
 inherits = "release"
 codegen-units = 1

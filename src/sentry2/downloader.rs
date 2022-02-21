@@ -209,13 +209,26 @@ impl HeaderDownloader {
     fn verify_chunks(headers: &mut Vec<BlockHeader>) {
         headers.par_sort_unstable_by_key(|v| v.number);
         let valid_till = AtomicUsize::new(0);
+        //&& valid_till.load(std::sync::atomic::Ordering::SeqCst) > i
         headers.par_iter().enumerate().for_each(|(i, header)| {
             if i > 0
                 && (header.number != headers[i - 1].number + 1
                     || header.parent_hash != headers[i - 1].hash())
-                && valid_till.load(std::sync::atomic::Ordering::SeqCst) > i
             {
-                valid_till.store(i - 1, std::sync::atomic::Ordering::SeqCst);
+                let mut value = valid_till.load(std::sync::atomic::Ordering::SeqCst);
+                loop {
+                    if valid_till.compare_exchange(
+                        value,
+                        i,
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                    ) == Ok(value)
+                    {
+                        break;
+                    } else {
+                        value = valid_till.load(std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
             }
         });
 
@@ -228,6 +241,7 @@ impl HeaderDownloader {
             valid_till.load(std::sync::atomic::Ordering::SeqCst)
         );
     }
+
     /// Flushes step progress.
     fn flush<E: EnvironmentKind>(
         &mut self,
