@@ -19,6 +19,7 @@ use rayon::{
     slice::ParallelSliceMut,
 };
 use std::{
+    collections::VecDeque,
     sync::{atomic::AtomicUsize, Arc},
     time::Duration,
 };
@@ -357,72 +358,64 @@ impl HeaderDownloader {
 
     /// Finds chain tip if it's possible at the given moment.
     async fn try_find_tip(&mut self) -> anyhow::Result<bool> {
-        let mut canonical = Vec::new();
-        for mut parent in self.childs_table.keys().into_iter().cloned() {
-            let mut chain = vec![parent];
-            while let Some(childrens) = self.childs_table.get(&parent) {
-                if childrens.len() == 1 {
-                    parent = *childrens.iter().next().unwrap();
-                    chain.push(parent);
-                } else {
-                    for child in childrens {
-                        match self.childs_table.get(child) {
-                            Some(v) => {
-                                if v.len() == 1 {
-                                    parent = *child;
-                                    chain.push(parent);
-                                }
-                            }
-                            None => {
-                                let _ = self
-                                    .sentry
-                                    .send_header_request(HeaderRequest {
-                                        start: (*child).into(),
-                                        limit: 1,
-                                        skip: 1,
-                                        ..Default::default()
-                                    })
-                                    .await;
-                            }
-                        }
+        let possible_tips = self
+            .childs_table
+            .values()
+            .flat_map(|childs| childs.clone())
+            .collect::<LinkedHashSet<_>>();
+
+        let mut longest_path = LinkedHashSet::new();
+
+        for tip in possible_tips {
+            let mut path = LinkedHashSet::new();
+            path.insert(tip);
+            let mut queue = VecDeque::new();
+            queue.push_back(tip);
+
+            while let Some(hash) = queue.pop_front() {
+                for (parent, childs) in self.childs_table.iter() {
+                    if childs.contains(&hash) {
+                        path.insert(*parent);
+                        queue.push_back(*parent);
                     }
-                    break;
                 }
             }
-            if chain.len() > canonical.len() {
-                canonical = chain;
+            if path.len() >= longest_path.len() {
+                longest_path = path;
             }
         }
-        if canonical.len() >= 4 {
-            info!("Successfully found canonical chain: {:#?}", canonical);
-            self.canonical_marker = *canonical.last().unwrap();
+
+        let _ = self
+            .childs_table
+            .clone()
+            .into_iter()
+            .flat_map(|(k, mut v)| {
+                v.insert(k);
+                v
+            })
+            .map(|v| {
+                let sentry = self.sentry.clone();
+                tokio::spawn(async move {
+                    let _ = sentry
+                        .send_header_request(HeaderRequest {
+                            start: v.into(),
+                            limit: 1,
+                            skip: 1,
+                            ..Default::default()
+                        })
+                        .await;
+                })
+            })
+            .collect::<FuturesUnordered<_>>()
+            .map(|_| ())
+            .collect::<()>();
+
+        if longest_path.len() >= 3 {
+            info!("Successfully found canonical chain: {:#?}", longest_path);
+            self.canonical_marker = longest_path.pop_back().unwrap();
             self.found_tip = true;
             Ok(true)
         } else {
-            let _ = self
-                .childs_table
-                .clone()
-                .into_iter()
-                .flat_map(|(k, mut v)| {
-                    v.insert(k);
-                    v
-                })
-                .map(|v| {
-                    let sentry = self.sentry.clone();
-                    tokio::spawn(async move {
-                        let _ = sentry
-                            .send_header_request(HeaderRequest {
-                                start: v.into(),
-                                limit: 1,
-                                skip: 1,
-                                ..Default::default()
-                            })
-                            .await;
-                    })
-                })
-                .collect::<FuturesUnordered<_>>()
-                .map(|_| ())
-                .collect::<()>();
             Ok(false)
         }
     }
