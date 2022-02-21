@@ -208,18 +208,19 @@ impl HeaderDownloader {
 
     fn verify_chunks(headers: &mut Vec<BlockHeader>) {
         headers.par_sort_unstable_by_key(|v| v.number);
+
         let valid_till = AtomicUsize::new(0);
-        //&& valid_till.load(std::sync::atomic::Ordering::SeqCst) > i
+
         headers.par_iter().enumerate().for_each(|(i, header)| {
             if i > 0
                 && (header.number != headers[i - 1].number + 1
                     || header.parent_hash != headers[i - 1].hash())
             {
                 let mut value = valid_till.load(std::sync::atomic::Ordering::SeqCst);
-                loop {
+                while (i - 1) < value {
                     if valid_till.compare_exchange(
                         value,
-                        i,
+                        i - 1,
                         std::sync::atomic::Ordering::SeqCst,
                         std::sync::atomic::Ordering::SeqCst,
                     ) == Ok(value)
