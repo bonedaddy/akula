@@ -84,6 +84,7 @@ impl HeaderDownloader {
         let mut stream = self.sentry.recv().await?;
         if !self.found_tip {
             self.evaluate_chain_tip(&mut stream).await?;
+            debug_assert!(self.found_tip);
         }
 
         while db.begin()?.cursor(tables::CanonicalHeader)?.last().map_or(
@@ -118,7 +119,9 @@ impl HeaderDownloader {
 
         if !self.found_tip {
             self.evaluate_chain_tip(stream).await?;
+            debug_assert!(self.found_tip);
         }
+
         let (mut block_number, mut hash) = db
             .begin()?
             .cursor(tables::CanonicalHeader)?
@@ -229,8 +232,8 @@ impl HeaderDownloader {
                     let mut value = valid_till.load(std::sync::atomic::Ordering::SeqCst);
                     while i < value {
                         // there's window in between, because value can be changed since we read it,
-                        // so we need to make sure that we're changing the right value,
-                        // and if not, reload it.
+                        // so we need to make sure that we're changing
+                        // the same value as we read and if not, reload it and try again if condition meets
                         if valid_till.compare_exchange(
                             value,
                             i,
