@@ -19,7 +19,6 @@ use rayon::{
     slice::ParallelSliceMut,
 };
 use std::{
-    collections::VecDeque,
     sync::{atomic::AtomicUsize, Arc},
     time::Duration,
 };
@@ -37,8 +36,6 @@ pub struct HeaderDownloader {
     pub height: BlockNumber,
     /// The set of newly seen hashes.
     pub seen_announces: LinkedHashSet<H256>,
-    /// Mapping from the parent hash to the set of children hashes.
-    pub childs_table: LinkedHashMap<H256, LinkedHashSet<H256>>,
     /// Mapping from the child hash to the parent hash.
     pub parents_table: HashMap<H256, H256>,
     /// Mapping from the block hash to it's number and optionally total difficulty.
@@ -73,7 +70,6 @@ impl HeaderDownloader {
             )),
             height: block.0,
             seen_announces: LinkedHashSet::new(),
-            childs_table: LinkedHashMap::new(),
             parents_table: HashMap::new(),
             blocks_table: HashMap::new(),
             canonical_marker: block.1,
@@ -325,7 +321,6 @@ impl HeaderDownloader {
                                 let hash = header.hash();
 
                                 self.parents_table.insert(hash, header.parent_hash);
-                                self.childs_table.entry(header.parent_hash).or_insert_with(LinkedHashSet::new).insert(hash);
                                 self.blocks_table.insert(hash, (header.number, None));
                                 self.sentry.send_header_request(HeaderRequest {
                                     start: hash.into(),
@@ -342,7 +337,6 @@ impl HeaderDownloader {
                                 = (v.block.header.hash(), v.block.header.number, v.block.header.parent_hash);
 
                             self.parents_table.insert(hash, parent_hash);
-                            self.childs_table.entry(parent_hash).or_insert_with(LinkedHashSet::new).insert(hash);
                             self.blocks_table.insert(hash, (number, Some(v.total_difficulty)));
                             self.sentry.send_header_request(HeaderRequest {
                                 start: hash.into(),
@@ -364,41 +358,29 @@ impl HeaderDownloader {
     /// Finds chain tip if it's possible at the given moment.
     async fn try_find_tip(&mut self) -> anyhow::Result<bool> {
         let possible_tips = self
-            .childs_table
-            .values()
-            .flat_map(|childs| childs.clone())
+            .parents_table
+            .keys()
+            .cloned()
             .collect::<LinkedHashSet<_>>();
 
         let mut longest_path = LinkedHashSet::new();
+        possible_tips.clone().into_iter().for_each(|tip| {
+            let mut path = LinkedHashSet::from_iter(vec![tip]);
 
-        for tip in possible_tips {
-            let mut path = LinkedHashSet::new();
-            path.insert(tip);
-            let mut queue = VecDeque::new();
-            queue.push_back(tip);
-
-            while let Some(hash) = queue.pop_front() {
-                match self.parents_table.get(&hash) {
-                    Some(v) => {
-                        path.insert(*v);
-                        queue.push_back(*v);
-                    }
-                    None => break,
-                }
+            let mut current = tip;
+            while let Some(v) = self.parents_table.get(&current) {
+                current = *v;
+                path.insert(current);
             }
+
+            info!("Found tip: {:?}", &path);
             if path.len() >= longest_path.len() {
                 longest_path = path;
             }
-        }
+        });
 
-        let _ = self
-            .childs_table
-            .clone()
+        let _ = possible_tips
             .into_iter()
-            .flat_map(|(k, mut v)| {
-                v.insert(k);
-                v
-            })
             .map(|v| {
                 let sentry = self.sentry.clone();
                 tokio::spawn(async move {
