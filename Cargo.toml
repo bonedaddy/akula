@@ -52,6 +52,12 @@ ethnum = { git = "https://github.com/vorot93/ethnum-rs", branch = "staging", fea
     "rlp",
     "scale",
 ] }
+fastrlp = { git = "https://github.com/vorot93/fastrlp", branch = "derive", features = [
+    "derive",
+    "ethereum-types",
+    "ethnum",
+    "std",
+] }
 fdlimit = "0.2"
 futures-core = "0.3"
 futures-intrusive = "0.4"

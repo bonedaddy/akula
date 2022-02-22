@@ -88,6 +88,7 @@ dependencies = [
  "ethereum-interfaces",
  "ethereum-types",
  "ethnum",
+ "fastrlp",
  "fdlimit",
  "futures-core",
  "futures-intrusive",
@@ -1162,6 +1163,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3fcf0cee53519c866c09b5de1f6c56ff9d647101f81c1964fa632e148896cdf"
 dependencies = [
  "instant",
+]
+
+[[package]]
+name = "fastrlp"
+version = "0.1.0"
+source = "git+https://github.com/vorot93/fastrlp?branch=derive#c92854fd382b3c531bd3b36ceaf85ad61a8d2140"
+dependencies = [
+ "arrayvec 0.7.2",
+ "bytes",
+ "ethereum-types",
+ "ethnum",
+ "fastrlp-derive",
+]
+
+[[package]]
+name = "fastrlp-derive"
+version = "0.1.0"
+source = "git+https://github.com/vorot93/fastrlp?branch=derive#c92854fd382b3c531bd3b36ceaf85ad61a8d2140"
+dependencies = [
+ "bytes",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

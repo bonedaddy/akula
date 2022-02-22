@@ -6,8 +6,9 @@ use crate::{
         util::{assert_subset, prefix_length},
     },
 };
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use ethereum_types::H256;
+use fastrlp::Encodable;
 use rlp::RlpStream;
 use std::{boxed::Box, cmp};
 
@@ -61,21 +62,23 @@ enum HashBuilderValue {
 fn leaf_node_rlp(path: &[u8], value: &[u8]) -> BytesMut {
     let encoded_path = encode_path(path, true);
 
-    let mut stream = RlpStream::new_list(2);
-    stream.append(&encoded_path);
-    stream.append(&value);
-
-    stream.out()
+    let mut out = BytesMut::new();
+    fastrlp::encode_list::<&[u8], _>(&[&*encoded_path, value], &mut out);
+    out
 }
 
 fn extension_node_rlp(path: &[u8], child_ref: &[u8]) -> BytesMut {
     let encoded_path = encode_path(path, false);
 
-    let mut stream = RlpStream::new_list(2);
-    stream.append(&encoded_path);
-    stream.append_raw(child_ref, 1);
-
-    stream.out()
+    let mut out = BytesMut::new();
+    let h = fastrlp::Header {
+        list: true,
+        payload_length: fastrlp::Encodable::length(&encoded_path) + child_ref.len(),
+    };
+    h.encode(&mut out);
+    encoded_path.encode(&mut out);
+    out.put_slice(child_ref);
+    out
 }
 
 pub(crate) struct HashBuilder<'nc> {

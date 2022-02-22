@@ -342,7 +342,7 @@ where
 
                 self.hb.add_leaf(
                     unpacked_key,
-                    rlp::encode(&account.to_rlp(storage_root)).as_ref(),
+                    &fastrlp::encode_fixed_size(&account.to_rlp(storage_root)),
                 );
 
                 acc = state.next()?
@@ -398,7 +398,7 @@ where
                         break;
                     }
                 }
-                hb.add_leaf(unpacked_loc, rlp::encode(&value).as_ref());
+                hb.add_leaf(unpacked_loc, fastrlp::encode_fixed_size(&value).as_ref());
                 storage = state.next_dup()?.map(|(_, v)| v);
             }
         }
@@ -867,7 +867,7 @@ mod tests {
         hashed_accounts.upsert(key1, a1).unwrap();
         hb.add_leaf(
             unpack_nibbles(&key1[..]),
-            &rlp::encode(&a1.to_rlp(EMPTY_ROOT)),
+            &fastrlp::encode_fixed_size(&a1.to_rlp(EMPTY_ROOT)),
         );
 
         // Some address whose hash starts with 0xB040

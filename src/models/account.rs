@@ -15,7 +15,14 @@ pub struct Account {
     pub code_hash: H256, // hash of the bytecode
 }
 
-#[derive(Debug, RlpEncodable, RlpDecodable)]
+#[derive(
+    Debug,
+    RlpEncodable,
+    fastrlp::RlpEncodable,
+    RlpDecodable,
+    fastrlp::RlpDecodable,
+    fastrlp::RlpMaxEncodedLen,
+)]
 pub struct RlpAccount {
     pub nonce: u64,
     pub balance: U256,
@@ -222,5 +229,27 @@ mod tests {
             },
             hex!("00"),
         )
+    }
+
+    #[test]
+    fn test_fastrlp_encode() {
+        let mut account = RlpAccount {
+            nonce: 0,
+            balance: U256::MAX,
+            code_hash: H256::zero(),
+            storage_root: H256::zero(),
+        };
+        assert_eq!(
+            &*rlp::encode(&account),
+            fastrlp::encode_fixed_size(&account).as_slice()
+        );
+
+        account.nonce = u64::MAX;
+        let encoded = fastrlp::encode_fixed_size(&account);
+        assert_eq!(&*rlp::encode(&account), encoded.as_slice());
+        assert_eq!(
+            encoded.len(),
+            <RlpAccount as fastrlp::MaxEncodedLenAssoc>::LEN
+        );
     }
 }
