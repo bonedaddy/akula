@@ -57,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
     info!("DB initialized");
 
     let mut hd = HeaderDownloader::new(sentry, db.begin()?, chain_config)?;
+    hd.runtime(&db).await?;
 
     Ok(())
 }
