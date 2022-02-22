@@ -29,7 +29,6 @@ dependencies = [
  "anyhow",
  "arrayref",
  "arrayvec",
- "async-channel 1.6.1 (git+https://github.com/smol-rs/async-channel)",
  "async-recursion",
  "async-stream",
  "async-trait",
@@ -119,9 +118,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.54"
+version = "1.0.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a99269dff3bc004caa411f38845c20303f1e393ca2bd6581576fa3a7f59577d"
+checksum = "159bb86af3a200e19a068f4224eae4c8bb2d0fa054c7e5d1cacd5cef95e684cd"
 
 [[package]]
 name = "arrayref"
@@ -143,16 +142,6 @@ name = "async-channel"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2114d64672151c0c5eaa5e131ec84a74f06e1e559830dabba01ca30605d66319"
-dependencies = [
- "concurrent-queue",
- "event-listener",
- "futures-core",
-]
-
-[[package]]
-name = "async-channel"
-version = "1.6.1"
-source = "git+https://github.com/smol-rs/async-channel#83073e9132dba41c93cf9cd7be1b4f74dd5ebf9d"
 dependencies = [
  "concurrent-queue",
  "event-listener",
@@ -1045,9 +1034,9 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "418d37c8b1d42553c93648be529cb70f920d3baf8ef469b74b9638df426e0b4c"
+checksum = "d39cd93900197114fa1fcb7ae84ca742095eed9442088988ae74fa744e930e77"
 dependencies = [
  "cfg-if",
  "libc",
@@ -1399,7 +1388,7 @@ source = "git+https://github.com/paritytech/jsonrpsee#721117de2abb49a50e16a6cec3
 dependencies = [
  "anyhow",
  "arrayvec",
- "async-channel 1.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-channel",
  "async-trait",
  "beef",
  "futures-channel",
@@ -1465,7 +1454,7 @@ name = "jsonrpsee-ws-server"
 version = "0.9.0"
 source = "git+https://github.com/paritytech/jsonrpsee#721117de2abb49a50e16a6cec3261d2ba63d5aea"
 dependencies = [
- "async-channel 1.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-channel",
  "futures-channel",
  "futures-util",
  "jsonrpsee-core",
@@ -2493,9 +2482,9 @@ dependencies = [
 
 [[package]]
 name = "semver"
-version = "1.0.5"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0486718e92ec9a68fbed73bb5ef687d71103b142595b406835649bebd33f72c7"
+checksum = "a4a3381e03edd24287172047536f20cabde766e2cd3e65e6b00fb3af51c4f38d"
 
 [[package]]
 name = "serde"
@@ -2695,20 +2684,20 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "strum"
-version = "0.23.0"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cae14b91c7d11c9a851d3fbc80a963198998c2a64eec840477fa92d8ce9b70bb"
+checksum = "e96acfc1b70604b8b2f1ffa4c57e59176c7dbb05d556c71ecd2f5498a1dee7f8"
 dependencies = [
  "strum_macros",
 ]
 
 [[package]]
 name = "strum_macros"
-version = "0.23.1"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bb0dc7ee9c15cea6199cde9a127fa16a4c5819af85395457ad72d68edc85a38"
+checksum = "6878079b17446e4d3eba6192bb0a2950d5b14f0ed8424b852310e5a94345d0ef"
 dependencies = [
- "heck 0.3.3",
+ "heck 0.4.0",
  "proc-macro2",
  "quote",
  "rustversion",

@@ -8,7 +8,7 @@ license = "Apache-2.0"
 default-run = "akula"
 
 [dependencies]
-anyhow = "1.0.54"
+anyhow = "1.0.55"
 arrayref = "0.3.6"
 arrayvec = { version = "0.7.2", features = ["serde"] }
 async-recursion = "1.0.0"
@@ -19,7 +19,7 @@ byte-unit = "4.0.13"
 bytes = { version = "1.1.0", features = ["serde"] }
 bytes-literal = { git = "https://github.com/vorot93/bytes-literal" }
 bytesize = "1.1.0"
-clap = { version = "3.1.0", features = ["derive"] }
+clap = { version = "3.1.1", features = ["derive"] }
 croaring = { git = "https://github.com/vorot93/croaring-rs", branch = "staging" }
 crossterm = { version = "0.23.0", optional = true }
 derive_more = "0.99.17"
@@ -76,8 +76,8 @@ serde_with = "1.12.0"
 sha2 = "0.10.2"
 sha3 = "0.10.1"
 string = { git = "https://github.com/carllerche/string" }
-strum = { version = "0.23.0", features = ["derive"] }
-strum_macros = "0.23.1"
+strum = { version = "0.24.0", features = ["derive"] }
+strum_macros = "0.24.0"
 substrate-bn = "0.6.0"
 tempfile = "3.3.0"
 thiserror = "1.0.30"
@@ -95,13 +95,12 @@ tracing-futures = "0.2.5"
 tracing-subscriber = { version = "0.3.9", features = ["env-filter"] }
 triehash = "0.8.4"
 walkdir = "2.3.2"
-async-channel = { git = "https://github.com/smol-rs/async-channel" }
 hashbrown = "0.12.0"
 hashlink = "0.7.0"
 fastrand = "1.7.0"
 
 [build-dependencies]
-anyhow = "1.0.54"
+anyhow = "1.0.55"
 vergen = "6.0.2"
 
 [dev-dependencies]

@@ -55,9 +55,7 @@ async fn main() -> anyhow::Result<()> {
     txn.commit()?;
 
     info!("DB initialized");
-
     let mut hd = HeaderDownloader::new(sentry, db.begin()?, chain_config)?;
-    hd.runtime(&db).await?;
-
+    hd.step(db.begin_mutable()?).await?;
     Ok(())
 }

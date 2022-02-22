@@ -1,8 +1,5 @@
 use crate::{
-    kv::{
-        mdbx::{MdbxEnvironment, MdbxTransaction},
-        tables,
-    },
+    kv::{mdbx::MdbxTransaction, tables},
     models::{BlockHeader, BlockNumber, H256},
     sentry::chain_config::ChainConfig,
     sentry2::{
@@ -22,7 +19,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
     time::Duration,
 };
-use tracing::{info, instrument};
+use tracing::info;
 
 use super::CoordinatorStream;
 
@@ -77,54 +74,18 @@ impl HeaderDownloader {
         })
     }
 
-    pub async fn runtime<E: EnvironmentKind>(
-        &mut self,
-        db: &'_ MdbxEnvironment<E>,
-    ) -> anyhow::Result<()> {
-        let mut stream = self.sentry.recv().await?;
-        if !self.found_tip {
-            self.evaluate_chain_tip(&mut stream).await?;
-            debug_assert!(self.found_tip);
-        }
-
-        while db.begin()?.cursor(tables::CanonicalHeader)?.last().map_or(
-            BlockNumber(0),
-            |v| match v {
-                Some(b) => b.0,
-                _ => BlockNumber(0),
-            },
-        ) < self.height
-        {
-            self.evaluate_chain_tip(&mut stream).await?;
-            self.step(db, Some(&mut stream)).await?;
-        }
-
-        Ok(())
-    }
-
-    /// Runs next step on the finite time.
-    #[instrument(name = "HeaderDownloader::step", skip(self, db, stream))]
     pub async fn step<E: EnvironmentKind>(
         &mut self,
-        db: &'_ MdbxEnvironment<E>,
-        stream: Option<&mut CoordinatorStream>,
+        txn: MdbxTransaction<'_, RW, E>,
     ) -> anyhow::Result<()> {
-        let mut sentry_stream = self.sentry.recv().await?;
-        let stream = match stream {
-            Some(stream) => {
-                drop(sentry_stream);
-                stream
-            }
-            None => &mut sentry_stream,
-        };
+        let mut stream = self.sentry.recv().await?;
 
         if !self.found_tip {
-            self.evaluate_chain_tip(stream).await?;
-            debug_assert!(self.found_tip);
+            self.evaluate_chain_tip(&mut stream).await?;
+            assert!(self.found_tip);
         }
 
-        let (mut block_number, mut hash) = db
-            .begin()?
+        let (mut block_number, mut hash) = txn
             .cursor(tables::CanonicalHeader)?
             .last()?
             .unwrap_or((BlockNumber(0), self.sentry.genesis_hash));
@@ -135,25 +96,21 @@ impl HeaderDownloader {
         } else {
             BlockNumber(BATCH_SIZE as u64)
         };
+
         let mut headers = Vec::<BlockHeader>::with_capacity(batch_size.0 as usize);
         while headers.len() < batch_size.0 as usize {
             if !headers.is_empty() {
                 let last = headers.last().unwrap();
                 (block_number, hash) = (last.number, last.hash());
             }
-
             headers.extend(
-                self.collect_headers(stream, block_number, hash, block_number + batch_size)
+                self.collect_headers(&mut stream, block_number, hash, block_number + batch_size)
                     .await?,
             );
         }
 
-        debug_assert!(headers.len() == batch_size.0 as usize);
-        self.flush(db.begin_mutable()?, headers)?;
-        info!(
-            "Successfully committed batch of {} headers",
-            batch_size.0 as usize
-        );
+        assert!(headers.len() == batch_size.0 as usize);
+        self.flush(txn, headers)?;
         Ok(())
     }
 
@@ -164,33 +121,7 @@ impl HeaderDownloader {
         hash: H256,
         end: BlockNumber,
     ) -> anyhow::Result<Vec<BlockHeader>> {
-        let mut requests = (start..end)
-            .step_by(CHUNK_SIZE)
-            .map(|i| {
-                (
-                    i,
-                    HeaderRequest {
-                        start: i.into(),
-                        limit: match i + (CHUNK_SIZE as u64) < end {
-                            true => CHUNK_SIZE as u64,
-                            false => (end - i).0,
-                        },
-                        ..Default::default()
-                    },
-                )
-            })
-            .collect::<LinkedHashMap<_, _>>();
-        requests.insert(
-            start,
-            HeaderRequest {
-                start: hash.into(),
-                limit: match start + (CHUNK_SIZE as u64) < end {
-                    true => CHUNK_SIZE as u64,
-                    false => (end - start).0,
-                },
-                ..Default::default()
-            },
-        );
+        let mut requests = Self::prepare_requests(start, hash, end);
 
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
         let mut headers = Vec::with_capacity(BATCH_SIZE);
@@ -216,7 +147,7 @@ impl HeaderDownloader {
                                 || v.headers.last().unwrap().number + 1
                                     == v.headers[0].number + requests.get(&v.headers[0].number).unwrap().limit)
                              {
-                                debug_assert!(requests.remove(&v.headers[0].number).is_some());
+                                assert!(requests.remove(&v.headers[0].number).is_some());
                                 headers.extend(v.headers.into_iter());
                             }
                         }
@@ -313,22 +244,24 @@ impl HeaderDownloader {
                 _ = ticker.tick().fuse() => {
                     let _ = self.sentry.ping().await;
                     if self.try_find_tip().await? { break; } else {
-                        let _ =  self.parents_table.clone().into_iter().map(|(k, v)| {
-                            let s = self.sentry.clone();
-                            tokio::task::spawn(async move {
-                                let _ = s.send_header_request(HeaderRequest {
-                                    start: k.into(),
-                                    limit: 1,
-                                    skip: 1,
-                                    ..Default::default()
-                                }).await;
-                                let _ = s.send_header_request(HeaderRequest {
-                                    start: v.into(),
-                                    limit: 1,
-                                    skip: 1,
-                                    ..Default::default()
-                                }).await;
-                            })
+                        let _ =  self.parents_table.clone().into_iter().flat_map(|(k, v)| {
+                            (1..3).map(|skip| {
+                                let s = self.sentry.clone();
+                                tokio::task::spawn(async move {
+                                    let _ = s.send_header_request(HeaderRequest {
+                                        start: k.into(),
+                                        limit: 1,
+                                        skip,
+                                        ..Default::default()
+                                    }).await;
+                                    let _ = s.send_header_request(HeaderRequest {
+                                        start: v.into(),
+                                        limit: 1,
+                                        skip,
+                                        ..Default::default()
+                                    }).await;
+                                })
+                            }).collect::<Vec<_>>()
                         }).collect::<FuturesUnordered<_>>().map(|_| ()).collect::<()>();
                     };
                 }
@@ -387,6 +320,41 @@ impl HeaderDownloader {
         Ok(())
     }
 
+    fn prepare_requests(
+        start: BlockNumber,
+        hash: H256,
+        end: BlockNumber,
+    ) -> LinkedHashMap<BlockNumber, HeaderRequest> {
+        let mut requests = (start..end)
+            .step_by(CHUNK_SIZE)
+            .map(|i| {
+                (
+                    i,
+                    HeaderRequest {
+                        start: i.into(),
+                        limit: match i + (CHUNK_SIZE as u64) < end {
+                            true => CHUNK_SIZE as u64,
+                            false => (end - i).0,
+                        },
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect::<LinkedHashMap<_, _>>();
+        requests.insert(
+            start,
+            HeaderRequest {
+                start: hash.into(),
+                limit: match start + (CHUNK_SIZE as u64) < end {
+                    true => CHUNK_SIZE as u64,
+                    false => (end - start).0,
+                },
+                ..Default::default()
+            },
+        );
+        requests
+    }
+
     /// Finds chain tip if it's possible at the given moment.
     async fn try_find_tip(&mut self) -> anyhow::Result<bool> {
         let possible_tips = self
@@ -405,7 +373,6 @@ impl HeaderDownloader {
                 path.insert(current);
             }
 
-            info!("Found tip: {:?}", &path);
             if path.len() >= longest_path.len() {
                 longest_path = path;
             }
