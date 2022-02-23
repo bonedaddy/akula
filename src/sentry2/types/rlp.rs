@@ -3,6 +3,8 @@ use crate::sentry2::types::{
     NewPooledTransactionHashes,
 };
 
+use super::BlockBodies;
+
 #[inline(always)]
 pub fn decode_rlp_message(id: MessageId, data: &[u8]) -> anyhow::Result<Message> {
     let msg = match id {
@@ -15,6 +17,7 @@ pub fn decode_rlp_message(id: MessageId, data: &[u8]) -> anyhow::Result<Message>
         MessageId::NewPooledTransactionHashes => {
             Message::NewPooledTransactionHashes(rlp::decode::<NewPooledTransactionHashes>(data)?)
         }
+        MessageId::BlockBodies => Message::BlockBodies(rlp::decode::<BlockBodies>(data)?),
         _ => anyhow::bail!("Unknown message id: {:?}", id),
     };
     Ok(msg)

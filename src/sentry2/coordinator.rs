@@ -132,6 +132,7 @@ impl SentryCoordinator for Coordinator {
                                 grpc_sentry::MessageId::from(MessageId::NewBlockHashes) as i32,
                                 grpc_sentry::MessageId::from(MessageId::NewBlock) as i32,
                                 grpc_sentry::MessageId::from(MessageId::BlockHeaders) as i32,
+                                grpc_sentry::MessageId::from(MessageId::BlockBodies) as i32,
                             ],
                         )
                     })
@@ -334,20 +335,19 @@ impl tokio_stream::Stream for SingleSentryStream {
         let this = self.get_mut();
         match Pin::new(&mut this.0).poll_next(cx) {
             std::task::Poll::Ready(Some(Ok(value))) => {
-                let msg = match decode_rlp_message(
+                match decode_rlp_message(
                     match MessageId::try_from(grpc_sentry::MessageId::from_i32(value.id).unwrap()) {
                         Ok(id) => id,
                         _ => return std::task::Poll::Pending,
                     },
                     &value.data,
                 ) {
-                    Ok(v) => v,
-                    _ => return std::task::Poll::Pending,
-                };
-                std::task::Poll::Ready(Some(InboundMessage {
-                    msg,
-                    peer_id: value.peer_id.unwrap_or_default().into(),
-                }))
+                    Ok(msg) => std::task::Poll::Ready(Some(InboundMessage {
+                        msg,
+                        peer_id: value.peer_id.unwrap_or_default().into(),
+                    })),
+                    _ => std::task::Poll::Pending, //_ => return std::task::Poll::Pending,
+                }
             }
             _ => std::task::Poll::Pending,
         }

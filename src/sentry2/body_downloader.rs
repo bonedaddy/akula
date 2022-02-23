@@ -1,6 +1,7 @@
 #![allow(unreachable_code)]
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
+use itertools::Itertools;
 use mdbx::{EnvironmentKind, RO, RW};
 
 use crate::{
@@ -14,7 +15,14 @@ use crate::{
 };
 
 use super::{Coordinator, SentryCoordinator, SentryPool};
-use std::{ops::ControlFlow, sync::Arc, time::Duration};
+use std::{
+    ops::ControlFlow,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 const BATCH_SIZE: usize = 3 << 15;
 const CHUNK_SIZE: usize = 1 << 10;
@@ -65,7 +73,6 @@ impl BodyDownloader {
         let mut cursor = txn.cursor(tables::CanonicalHeader)?;
         let requests = cursor
             .walk(Some(block_number))
-            .step_by(1024)
             .map(|v| {
                 if let Ok(v) = v {
                     if v.0 < last_block_number {
@@ -83,22 +90,50 @@ impl BodyDownloader {
             })
             .collect::<HashMap<_, _>>();
 
-        let some_hash = requests.values().cloned().next().unwrap();
+        let mut chunks = requests
+            .values()
+            .into_iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .chunks(1024)
+            .enumerate()
+            .map(|(i, v)| (BlockNumber((i as u64) * 1024), v.into()))
+            .collect::<HashMap<BlockNumber, Vec<_>>>();
+        let mut block_bodies = HashSet::new();
+        let mut ticker = tokio::time::interval(Duration::from_secs(120));
 
-        let mut ticker = tokio::time::interval(Duration::from_secs(15));
-
-        loop {
+        while !requests.is_empty() {
             select! {
-                _ = ticker.tick().fuse() => {
-                    let _ = (0..5).map(|_| {
+            _ = ticker.tick().fuse() => {
+                let _ = chunks.clone().into_iter().map(|req| {
+                        dbg!(&req.1);
                         let s = self.sentry.clone();
-                        tokio::spawn(async move { s.send_body_request(vec![some_hash]).await; })
-                    }).collect::<FuturesUnordered<_>>().map(|_| ()).collect::<Vec<_>>();
-                }
-                msg = stream.next().fuse() => {
-                    if msg.is_none() { continue; }
-
-                    dbg!(&msg);
+                        tokio::spawn(async move { s.send_body_request(req.1).await })
+                    }).collect::<FuturesUnordered<_>>().map(|_| ()).collect::<()>();
+            }
+            msg = stream.next().fuse() => {
+                if msg.is_none() { continue; }
+                match msg.unwrap().msg {
+                    Message::BlockBodies(v) => {
+                            dbg!(&block_bodies.len(), &chunks.len(), &v.bodies.len());
+                            if v.bodies.len() == 1024 && !block_bodies.contains(&v.bodies) {
+                                let bodies = v.bodies;
+                                let block_number = bodies.clone().into_iter().find_map(|v| {
+                                    if !v.ommers.is_empty() {
+                                        Some(v.ommers[0].number - v.ommers[0].number.0%1024)
+                                    } else {
+                                        None
+                                    }
+                                }).unwrap();
+                                if !chunks.contains_key(&block_number) {
+                                    continue;
+                                }
+                                chunks.remove(&block_number);
+                                block_bodies.insert(bodies);
+                            };
+                    },
+                    _ => continue,
+                };
 
                 }
             }
