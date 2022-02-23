@@ -212,20 +212,20 @@ impl HeaderDownloader {
         let mut cursor_td = txn.cursor(tables::HeadersTotalDifficulty)?;
         let mut td = cursor_td.last()?.map(|v| v.1).unwrap();
 
-        headers.into_iter().for_each(|header| {
+        for header in headers {
             if header.number.0 == 0 {
-                return;
+                continue;
             }
 
             let hash = header.hash();
             let number = header.number;
             td += header.difficulty;
 
-            cursor_header_num.put(hash, number).unwrap();
-            cursor_header.put((number, hash), header).unwrap();
-            cursor_canonical.put(number, hash).unwrap();
-            cursor_td.put((number, hash), td).unwrap();
-        });
+            cursor_header_num.put(hash, number)?;
+            cursor_header.put((number, hash), header)?;
+            cursor_canonical.put(number, hash)?;
+            cursor_td.put((number, hash), td)?;
+        }
 
         txn.commit()?;
         Ok(())
@@ -359,10 +359,10 @@ impl HeaderDownloader {
             .collect::<LinkedHashSet<_>>();
 
         let mut longest_path = LinkedHashSet::new();
-        possible_tips.clone().into_iter().for_each(|tip| {
-            let mut path = LinkedHashSet::from_iter(vec![tip]);
+        for tip in &possible_tips {
+            let mut path = LinkedHashSet::from_iter(vec![*tip]);
 
-            let mut current = tip;
+            let mut current = *tip;
             while let Some(v) = self.parents_table.get(&current) {
                 current = *v;
                 path.insert(current);
@@ -371,7 +371,7 @@ impl HeaderDownloader {
             if path.len() >= longest_path.len() {
                 longest_path = path;
             }
-        });
+        }
 
         let _ = possible_tips
             .into_iter()

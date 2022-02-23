@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use auto_impl::auto_impl;
 use ethereum_interfaces::sentry as grpc_sentry;
 use futures_core::Stream;
-use futures_util::{FutureExt, StreamExt};
+use futures_util::{stream::FuturesUnordered, FutureExt, StreamExt};
 use std::{
     pin::Pin,
     sync::{atomic::AtomicU64, Arc},
@@ -76,7 +76,6 @@ impl SentryCoordinator for Coordinator {
         self.status.store(status);
         Ok(())
     }
-    #[inline(always)]
     async fn set_status(&self) -> anyhow::Result<()> {
         let status = self.status.load();
         let status_data = grpc_sentry::StatusData {
@@ -89,17 +88,20 @@ impl SentryCoordinator for Coordinator {
             }),
             max_block: status.height,
         };
-        let mut futs = Vec::new();
-        self.sentries.iter().for_each(|sentry| {
-            let mut sentry = sentry.clone();
-            let status_data = status_data.clone();
-            futs.push(async move {
-                let _ = sentry.hand_shake(tonic::Request::new(())).await;
-                let _ = sentry.set_status(status_data).await;
-            });
-        });
-
-        futures_util::future::join_all(futs).await;
+        let _ = self
+            .sentries
+            .iter()
+            .map(|sentry| {
+                let mut sentry = sentry.clone();
+                let status_data = status_data.clone();
+                tokio::spawn(async move {
+                    let _ = sentry.hand_shake(tonic::Request::new(())).await;
+                    let _ = sentry.set_status(status_data).await;
+                })
+            })
+            .collect::<FuturesUnordered<_>>()
+            .map(|_| ())
+            .collect::<Vec<_>>();
 
         Ok(())
     }
@@ -113,7 +115,6 @@ impl SentryCoordinator for Coordinator {
         self.send_message(msg, predicate().unwrap()).await?;
         Ok(())
     }
-    #[inline(always)]
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()> {
         self.set_status().await?;
         self.send_message(req.into(), PeerFilter::Random(50))
@@ -193,30 +194,28 @@ impl SentryCoordinator for Coordinator {
     }
 
     async fn penalize_peer(&self, penalty: Penalty) -> anyhow::Result<()> {
-        let mut tasks = Vec::new();
-
-        self.sentries.iter().for_each(|s| {
-            let sentry = s.clone();
-            tasks.push(tokio::spawn(async move {
-                sentry
-                    .clone()
-                    .penalize_peer(grpc_sentry::PenalizePeerRequest {
-                        peer_id: Some(penalty.peer_id.into()),
-                        penalty: 0,
-                    })
-                    .await
-                    .unwrap();
-            }));
-        });
-
-        for task in tasks {
-            let _ = task.await;
-        }
+        let _ = self
+            .sentries
+            .iter()
+            .map(|s| {
+                let sentry = s.clone();
+                tokio::spawn(async move {
+                    let _ = sentry
+                        .clone()
+                        .penalize_peer(grpc_sentry::PenalizePeerRequest {
+                            peer_id: Some(penalty.peer_id.into()),
+                            penalty: 0,
+                        })
+                        .await;
+                })
+            })
+            .collect::<FuturesUnordered<_>>()
+            .map(|_| ())
+            .collect::<Vec<_>>();
 
         Ok(())
     }
 
-    #[inline(always)]
     async fn ping(&self) -> anyhow::Result<()> {
         let _ = self
             .send_header_request(HeaderRequest {
@@ -232,7 +231,6 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
 
-    #[inline(always)]
     async fn send_message(&self, msg: Message, predicate: PeerFilter) -> anyhow::Result<()> {
         let data = grpc_sentry::OutboundMessageData {
             id: grpc_sentry::MessageId::from(msg.id()) as i32,
