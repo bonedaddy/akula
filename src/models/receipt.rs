@@ -1,8 +1,7 @@
 use super::*;
 use crate::crypto::*;
 use bytes::{BufMut, Bytes, BytesMut};
-use rlp::{DecoderError, Encodable, RlpStream};
-use rlp_derive::RlpDecodable;
+use fastrlp::*;
 use serde::*;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -26,32 +25,6 @@ impl Receipt {
         }
     }
 
-    fn encode_inner(&self, s: &mut RlpStream, standalone: bool) {
-        match self.tx_type {
-            TxType::Legacy => {
-                let l = s.begin_list(4);
-                l.append(&self.success);
-                l.append(&self.cumulative_gas_used);
-                l.append(&self.bloom);
-                l.append_list(&self.logs);
-            }
-            TxType::EIP2930 | TxType::EIP1559 => {
-                let mut b = BytesMut::with_capacity(1);
-                b.put_u8(self.tx_type as u8);
-                let mut l = RlpStream::new_list_with_buffer(b, 4);
-                l.append(&self.success);
-                l.append(&self.cumulative_gas_used);
-                l.append(&self.bloom);
-                l.append_list(&self.logs);
-                if standalone {
-                    s.append_raw(&*l.out().freeze(), 1);
-                } else {
-                    s.append(&l.out());
-                }
-            }
-        }
-    }
-
     fn decode_inner(rlp: &rlp::Rlp, is_legacy: bool) -> Result<Self, DecoderError> {
         Ok(match is_legacy {
             true => {
@@ -65,27 +38,98 @@ impl Receipt {
             }
         })
     }
-}
 
-impl TrieEncode for Receipt {
-    fn trie_encode(&self) -> Bytes {
-        let mut s = RlpStream::new();
-        self.encode_inner(&mut s, true);
-        s.out().freeze()
+    fn rlp_header(&self) -> fastrlp::Header {
+        let h = fastrlp::Header {
+            list: true,
+            payload_length: 0,
+        };
+
+        h.payload_length += Encodable::length(&self.success);
+        h.payload_length += Encodable::length(&self.cumulative_gas_used);
+        h.payload_length += Encodable::length(&self.bloom);
+        h.payload_length += Encodable::length(&self.logs);
+
+        h
+    }
+
+    fn encode_inner(&self, out: &mut dyn BufMut, rlp_head: Header) {
+        if !matches!(self.tx_type, TxType::Legacy) {
+            out.put_u8(self.tx_type as u8);
+        }
+
+        rlp_head.encode(out);
+        Encodable::encode(&self.success, out);
+        Encodable::encode(&self.cumulative_gas_used, out);
+        Encodable::encode(&self.bloom, out);
+        Encodable::encode(&self.logs, out);
     }
 }
 
 impl Encodable for Receipt {
-    fn rlp_append(&self, s: &mut rlp::RlpStream) {
-        self.encode_inner(s, false);
+    fn length(&self) -> usize {
+        let rlp_head = self.rlp_header();
+        let rlp_len = length_of_length(rlp_head.payload_length) + rlp_head.payload_length;
+        if matches!(self.tx_type, TxType::Legacy) {
+            rlp_len
+        } else {
+            // EIP-2718 objects are wrapped into byte array in containing RLP
+            length_of_length(rlp_len + 1) + rlp_len + 1
+        }
+    }
+
+    fn encode(&self, out: &mut dyn BufMut) {
+        let rlp_head = self.rlp_header();
+
+        if !matches!(self.tx_type, TxType::Legacy) {
+            let rlp_len = length_of_length(rlp_head.payload_length) + rlp_head.payload_length;
+            Header {
+                list: false,
+                payload_length: rlp_len + 1,
+            }
+            .encode(out);
+        }
+
+        out.put_u8(self.tx_type as u8);
+
+        self.encode_inner(out, rlp_head);
+    }
+}
+
+impl TrieEncode for Receipt {
+    fn trie_encode(&self) -> Bytes {
+        let mut s = BytesMut::new();
+        self.encode_inner(&mut s, self.rlp_header());
+        s.freeze()
     }
 }
 
 impl Decodable for Receipt {
-    fn decode(rlp: &rlp::Rlp) -> Result<Self, rlp::DecoderError> {
-        // FIXME: This check may be incorrect
-        let is_legacy = !rlp.is_data();
-        Self::decode_inner(rlp, is_legacy)
+    fn decode(buf: &mut &[u8]) -> Result<Self, DecodeError> {
+        let rlp_head = Header::decode(buf)?;
+
+        Ok(if rlp_head.list {
+            let started_len = buf.len();
+            let tx = legacy_decode(buf)?;
+
+            let consumed = started_len - buf.len();
+            if consumed != rlp_head.payload_length {
+                return Err(fastrlp::DecodeError::ListLengthMismatch {
+                    expected: rlp_head.payload_length,
+                    got: consumed,
+                });
+            }
+
+            tx
+        } else if rlp_head.payload_length == 0 {
+            return Err(DecodeError::InputTooShort);
+        } else {
+            if buf.is_empty() {
+                return Err(DecodeError::InputTooShort);
+            }
+
+            let tx_type = TxType::from_u8(buf[0])?;
+        })
     }
 }
 

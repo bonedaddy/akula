@@ -15,7 +15,6 @@ pub use self::{
 
 use derive_more::*;
 use hex_literal::hex;
-use rlp::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 use std::{iter::Step, mem::size_of, ops::Add};
 
@@ -77,15 +76,15 @@ macro_rules! u64_wrapper {
             }
         }
 
-        impl Encodable for $ty {
+        impl rlp::Encodable for $ty {
             fn rlp_append(&self, s: &mut rlp::RlpStream) {
                 self.0.rlp_append(s)
             }
         }
 
-        impl Decodable for $ty {
+        impl rlp::Decodable for $ty {
             fn decode(rlp: &rlp::Rlp) -> Result<Self, rlp::DecoderError> {
-                <u64 as Decodable>::decode(rlp).map(Self)
+                <u64 as rlp::Decodable>::decode(rlp).map(Self)
             }
         }
 

@@ -6,9 +6,9 @@ use crate::{
 use bytes::{BufMut, Bytes, BytesMut};
 use derive_more::Deref;
 use educe::Educe;
+use fastrlp::*;
 use hex_literal::hex;
 use parity_scale_codec::{Compact, Decode, Encode, EncodeAsRef, EncodeLike, Input};
-use rlp::{Decodable, DecoderError, Encodable, Rlp, RlpStream};
 use secp256k1::{
     ecdsa::{RecoverableSignature, RecoveryId},
     Message as SecpMessage, SECP256K1,
@@ -25,13 +25,13 @@ pub enum TxType {
 }
 
 impl TryFrom<u8> for TxType {
-    type Error = DecoderError;
+    type Error = DecodeError;
     fn try_from(orig: u8) -> Result<Self, Self::Error> {
         match orig {
             0 => Ok(TxType::Legacy),
             1 => Ok(TxType::EIP2930),
             2 => Ok(TxType::EIP1559),
-            _ => Err(DecoderError::Custom("Invalid tx type")),
+            _ => Err(DecodeError::Custom("Invalid tx type")),
         }
     }
 }

@@ -247,9 +247,5 @@ mod tests {
         account.nonce = u64::MAX;
         let encoded = fastrlp::encode_fixed_size(&account);
         assert_eq!(&*rlp::encode(&account), encoded.as_slice());
-        assert_eq!(
-            encoded.len(),
-            <RlpAccount as fastrlp::MaxEncodedLenAssoc>::LEN
-        );
     }
 }

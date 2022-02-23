@@ -488,7 +488,12 @@ where
         let (message_id, payload) = match message {
             PeerMessage::Disconnect(reason) => {
                 this.disconnected = true;
-                (0x01, rlp::encode(&reason.to_u8().unwrap()).into())
+                (
+                    0x01,
+                    fastrlp::encode_fixed_size(&reason.to_u8().unwrap())
+                        .to_vec()
+                        .into(),
+                )
             }
             PeerMessage::Ping => {
                 debug!("sending ping message");

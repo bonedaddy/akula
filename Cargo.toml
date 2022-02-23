@@ -151,9 +151,10 @@ tokio = { version = "1", features = ["full"] }
 tokio-test = "0.4.2"
 
 [patch.crates-io]
-enr = { git = "https://github.com/rust-ethereum/enr", branch = "vorot93/update-deps" }
-ethnum = { git = "https://github.com/vorot93/ethnum-rs", branch = "staging" }
 arrayvec = { git = "https://github.com/vorot93/arrayvec", branch = "pop-unchecked" }
+enr = { git = "https://github.com/rust-ethereum/enr", branch = "vorot93/update-deps" }
+ethereum-forkid = { git = "https://github.com/rust-ethereum/forkid", branch = "fastrlp" }
+ethnum = { git = "https://github.com/vorot93/ethnum-rs", branch = "staging" }
 
 [[bin]]
 path = "bin/akula.rs"

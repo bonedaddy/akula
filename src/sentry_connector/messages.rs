@@ -160,19 +160,13 @@ pub struct GetReceiptsMessage {
     pub block_hashes: Vec<H256>,
 }
 
-#[derive(rlp_derive::RlpEncodable, rlp_derive::RlpDecodable, Clone, PartialEq, Debug)]
+#[derive(RlpEncodable, RlpDecodable, Clone, PartialEq, Debug)]
 pub struct ReceiptsMessage {
     pub request_id: u64,
     pub receipts: Vec<BlockReceipts>,
 }
 
-#[derive(Clone, PartialEq, Debug)]
-pub struct ForkIdentifier {
-    pub fork_hash: Vec<u8>,
-    pub fork_next: u64,
-}
-
-#[derive(rlp_derive::RlpEncodable, rlp_derive::RlpDecodable, Clone, PartialEq, Debug)]
+#[derive(RlpEncodable, RlpDecodable, Clone, PartialEq, Debug)]
 pub struct StatusMessage {
     pub protocol_version: usize,
     pub network_id: u64,
