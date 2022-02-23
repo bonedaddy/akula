@@ -102,7 +102,7 @@ impl HeaderDownloader {
             if !headers.is_empty() {
                 let last = headers.last().unwrap();
                 (block_number, hash) = (last.number, last.hash());
-            }
+            };
             headers.extend(
                 self.collect_headers(&mut stream, block_number, hash, block_number + batch_size)
                     .await?,
@@ -114,6 +114,7 @@ impl HeaderDownloader {
         Ok(())
     }
 
+    /// Collects headers with their hashes.
     async fn collect_headers(
         &self,
         stream: &mut CoordinatorStream,
@@ -156,10 +157,10 @@ impl HeaderDownloader {
                 }
             }
         }
-        Self::verify_chunks(&mut headers);
         Ok(headers)
     }
 
+    /// Verifies given block headers and partially invalidates them if necessary.
     fn verify_chunks(headers: &mut Vec<BlockHeader>) {
         headers.par_sort_unstable_by_key(|v| v.number);
 
@@ -209,19 +210,13 @@ impl HeaderDownloader {
         let mut cursor_header = txn.cursor(tables::Header)?;
         let mut cursor_canonical = txn.cursor(tables::CanonicalHeader)?;
         let mut cursor_td = txn.cursor(tables::HeadersTotalDifficulty)?;
-        let mut td = txn
-            .get(
-                tables::HeadersTotalDifficulty,
-                cursor_canonical
-                    .last()
-                    .map_or((0.into(), self.sentry.genesis_hash), |v| match v {
-                        Some((b, h)) => (b, h),
-                        None => (0.into(), self.sentry.genesis_hash),
-                    }),
-            )?
-            .unwrap_or_default();
+        let mut td = cursor_td.last()?.map(|v| v.1).unwrap();
 
         headers.into_iter().for_each(|header| {
+            if header.number.0 == 0 {
+                return;
+            }
+
             let hash = header.hash();
             let number = header.number;
             td += header.difficulty;
