@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use akula::{
     sentry::chain_config::ChainsConfig,
-    sentry2::{downloader::HeaderDownloader, SentryClient},
+    sentry2::{body_downloader::BodyDownloader, downloader::HeaderDownloader, SentryClient},
 };
 use anyhow::Context;
 use clap::Parser;
@@ -55,7 +55,11 @@ async fn main() -> anyhow::Result<()> {
     txn.commit()?;
 
     info!("DB initialized");
-    let mut hd = HeaderDownloader::new(sentry, db.begin()?, chain_config)?;
-    hd.step(db.begin_mutable()?).await?;
+    // let mut hd = HeaderDownloader::new(sentry.clone(), db.begin()?, chain_config.clone())?;
+    // hd.step(db.begin_mutable()?).await?;
+
+    let mut bd = BodyDownloader::new(sentry, db.begin()?, chain_config)?;
+    bd.step(db.begin_mutable()?).await?;
+
     Ok(())
 }

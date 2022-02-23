@@ -1,5 +1,12 @@
 use crate::models::{Block, BlockNumber, H256};
 use rlp_derive::*;
+
+#[derive(Debug, Clone, PartialEq, RlpEncodable, RlpDecodable)]
+pub struct GetBlockBodies {
+    pub request_id: u64,
+    pub hashes: Vec<H256>,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum BlockId {
     Hash(H256),
@@ -27,6 +34,7 @@ pub struct BlockHashAndNumber {
 }
 
 impl BlockHashAndNumber {
+    #[inline(always)]
     pub const fn new(hash: H256, number: BlockNumber) -> Self {
         Self { hash, number }
     }
@@ -54,6 +62,7 @@ pub struct NewBlock {
 }
 
 impl NewBlock {
+    #[inline(always)]
     pub const fn new(block: Block, total_difficulty: u128) -> Self {
         Self {
             block,
@@ -61,4 +70,3 @@ impl NewBlock {
         }
     }
 }
-pub struct BodyRequest {}

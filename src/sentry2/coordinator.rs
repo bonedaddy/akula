@@ -105,14 +105,10 @@ impl SentryCoordinator for Coordinator {
 
         Ok(())
     }
-    async fn send_body_request(&self, req: BodyRequest) -> anyhow::Result<()> {
-        let transform = move |_req: BodyRequest| -> anyhow::Result<Message> {
-            Err(anyhow::anyhow!("Not implemented"))
-        };
-        let msg = transform(req).unwrap();
-        let predicate =
-            move || -> anyhow::Result<PeerFilter> { Err(anyhow::anyhow!("Not implemented")) };
-        self.send_message(msg, predicate().unwrap()).await?;
+    async fn send_body_request(&self, req: Vec<H256>) -> anyhow::Result<()> {
+        self.set_status().await?;
+        self.send_message(req.into(), PeerFilter::Random(50))
+            .await?;
         Ok(())
     }
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()> {
@@ -363,7 +359,7 @@ impl tokio_stream::Stream for SingleSentryStream {
 pub trait SentryCoordinator: Send + Sync {
     fn update_status(&self, status: Status) -> anyhow::Result<()>;
     async fn set_status(&self) -> anyhow::Result<()>;
-    async fn send_body_request(&self, req: BodyRequest) -> anyhow::Result<()>;
+    async fn send_body_request(&self, req: Vec<H256>) -> anyhow::Result<()>;
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()>;
     async fn recv(&self) -> anyhow::Result<CoordinatorStream>;
     async fn recv_headers(&self) -> anyhow::Result<CoordinatorStream>;

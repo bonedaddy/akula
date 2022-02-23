@@ -1,10 +1,10 @@
-use super::{header::BlockHeaders, HeaderRequest, PeerId};
+use super::{header::BlockHeaders, GetBlockBodies, HeaderRequest, PeerId};
 use crate::{
-    models::H256,
+    models::{BlockBody, H256},
     sentry2::types::{GetBlockHeaders, GetBlockHeadersParams, NewBlock, NewBlockHashes},
 };
 use ethereum_interfaces::sentry as grpc_sentry;
-use rlp_derive::{RlpDecodableWrapper, RlpEncodableWrapper};
+use rlp_derive::{RlpDecodable, RlpDecodableWrapper, RlpEncodable, RlpEncodableWrapper};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundMessage {
@@ -101,10 +101,18 @@ impl const From<MessageId> for ethereum_interfaces::sentry::MessageId {
 #[derive(Debug, Clone, PartialEq, RlpEncodableWrapper, RlpDecodableWrapper)]
 pub struct NewPooledTransactionHashes(pub Vec<H256>);
 
+#[derive(Debug, Clone, PartialEq, RlpEncodable, RlpDecodable)]
+pub struct BlockBodies {
+    pub request_id: u64,
+    pub bodies: Vec<BlockBody>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     NewBlockHashes(NewBlockHashes),
     GetBlockHeaders(GetBlockHeaders),
+    GetBlockBodies(GetBlockBodies),
+    BlockBodies(BlockBodies),
     BlockHeaders(BlockHeaders),
     NewBlock(Box<NewBlock>),
     NewPooledTransactionHashes(NewPooledTransactionHashes),
@@ -125,6 +133,16 @@ impl From<HeaderRequest> for Message {
     }
 }
 
+impl From<Vec<H256>> for Message {
+    #[inline(always)]
+    fn from(req: Vec<H256>) -> Self {
+        Message::GetBlockBodies(GetBlockBodies {
+            request_id: fastrand::u32(..) as u64,
+            hashes: req,
+        })
+    }
+}
+
 impl Message {
     #[inline(always)]
     pub const fn id(&self) -> MessageId {
@@ -133,6 +151,8 @@ impl Message {
             Self::GetBlockHeaders(_) => MessageId::GetBlockHeaders,
             Self::BlockHeaders(_) => MessageId::BlockHeaders,
             Self::NewBlock(_) => MessageId::NewBlock,
+            Self::GetBlockBodies(_) => MessageId::GetBlockBodies,
+            Self::BlockBodies(_) => MessageId::BlockBodies,
             Self::NewPooledTransactionHashes(_) => MessageId::NewPooledTransactionHashes,
         }
     }
@@ -147,6 +167,8 @@ impl rlp::Encodable for Message {
             Self::BlockHeaders(v) => rlp::Encodable::rlp_append(v, s),
             Self::NewBlock(v) => rlp::Encodable::rlp_append(v, s),
             Self::NewPooledTransactionHashes(v) => rlp::Encodable::rlp_append(v, s),
+            Self::GetBlockBodies(v) => rlp::Encodable::rlp_append(v, s),
+            Self::BlockBodies(v) => rlp::Encodable::rlp_append(v, s),
         }
     }
 }
