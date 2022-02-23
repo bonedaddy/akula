@@ -114,7 +114,6 @@ impl HeaderDownloader {
         Ok(())
     }
 
-    /// Collects headers with their hashes.
     async fn collect_headers(
         &self,
         stream: &mut CoordinatorStream,
@@ -157,6 +156,7 @@ impl HeaderDownloader {
                 }
             }
         }
+        Self::verify_chunks(&mut headers);
         Ok(headers)
     }
 
