@@ -122,7 +122,7 @@ impl From<HeaderRequest> for Message {
     #[inline(always)]
     fn from(req: HeaderRequest) -> Self {
         Message::GetBlockHeaders(GetBlockHeaders {
-            request_id: fastrand::u32(..) as u64,
+            request_id: fastrand::u64(..),
             params: GetBlockHeadersParams {
                 start: req.start,
                 limit: req.limit,
@@ -137,7 +137,7 @@ impl From<Vec<H256>> for Message {
     #[inline(always)]
     fn from(req: Vec<H256>) -> Self {
         Message::GetBlockBodies(GetBlockBodies {
-            request_id: fastrand::u32(..) as u64,
+            request_id: fastrand::u64(..),
             hashes: req,
         })
     }

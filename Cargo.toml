@@ -19,7 +19,7 @@ byte-unit = "4.0.13"
 bytes = { version = "1.1.0", features = ["serde"] }
 bytes-literal = { git = "https://github.com/vorot93/bytes-literal" }
 bytesize = "1.1.0"
-clap = { version = "3.1.1", features = ["derive"] }
+clap = { version = "3.1.2", features = ["derive"] }
 croaring = { git = "https://github.com/vorot93/croaring-rs", branch = "staging" }
 crossterm = { version = "0.23.0", optional = true }
 derive_more = "0.99.17"
@@ -69,7 +69,11 @@ ripemd = "0.1.1"
 rlp = "0.5.1"
 rlp-derive = "0.1.0"
 ron = "0.7.0"
-secp256k1 = { version = "0.21.2", features = ["global-context", "recovery"] }
+secp256k1 = { version = "0.21.3", features = [
+    "global-context",
+    "recovery",
+    "rand-std",
+] }
 serde = "1.0.136"
 serde_json = "1.0.79"
 serde_with = "1.12.0"

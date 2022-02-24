@@ -1,28 +1,18 @@
 #![allow(unreachable_code)]
-use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
-use hashbrown::{HashMap, HashSet};
-use itertools::Itertools;
-use mdbx::{EnvironmentKind, RO, RW};
-
 use crate::{
-    kv::{
-        mdbx::MdbxTransaction,
-        tables::{self, CanonicalHeader, HeaderNumber},
-    },
+    kv::{mdbx::MdbxTransaction, tables},
     models::BlockNumber,
     sentry::chain_config::ChainConfig,
-    sentry2::types::{Message, Status},
-};
-
-use super::{Coordinator, SentryCoordinator, SentryPool};
-use std::{
-    ops::ControlFlow,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
+    sentry2::{
+        types::{Message, Status},
+        Coordinator, SentryCoordinator, SentryPool,
     },
-    time::Duration,
 };
+use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
+use hashbrown::{HashMap, HashSet};
+use mdbx::{EnvironmentKind, RO, RW};
+use std::{ops::ControlFlow, sync::Arc, time::Duration};
+use tracing::info;
 
 const BATCH_SIZE: usize = 3 << 15;
 const CHUNK_SIZE: usize = 1 << 10;
@@ -61,7 +51,7 @@ impl BodyDownloader {
         let mut stream = self.sentry.recv().await?;
         let block_number = txn.cursor(tables::BlockBody)?.last()?.unwrap().0 .0;
         let last_block_number = txn.cursor(tables::CanonicalHeader)?.last()?.unwrap().0;
-        let (batch_size, last_block_number) =
+        let (_batch_size, last_block_number) =
             if last_block_number - block_number >= BlockNumber(BATCH_SIZE as u64) {
                 (
                     BlockNumber(BATCH_SIZE as u64),
@@ -70,7 +60,7 @@ impl BodyDownloader {
             } else {
                 (last_block_number - block_number, last_block_number)
             };
-        let mut cursor = txn.cursor(tables::CanonicalHeader)?;
+        let cursor = txn.cursor(tables::CanonicalHeader)?;
         let requests = cursor
             .walk(Some(block_number))
             .map(|v| {
@@ -100,13 +90,13 @@ impl BodyDownloader {
             .map(|(i, v)| (BlockNumber((i as u64) * 1024), v.into()))
             .collect::<HashMap<BlockNumber, Vec<_>>>();
         let mut block_bodies = HashSet::new();
-        let mut ticker = tokio::time::interval(Duration::from_secs(120));
+        let mut ticker = tokio::time::interval(Duration::from_secs(30));
 
         while !requests.is_empty() {
             select! {
             _ = ticker.tick().fuse() => {
+                info!("Resending {} requests", chunks.len());
                 let _ = chunks.clone().into_iter().map(|req| {
-                        dbg!(&req.1);
                         let s = self.sentry.clone();
                         tokio::spawn(async move { s.send_body_request(req.1).await })
                     }).collect::<FuturesUnordered<_>>().map(|_| ()).collect::<()>();
@@ -115,22 +105,22 @@ impl BodyDownloader {
                 if msg.is_none() { continue; }
                 match msg.unwrap().msg {
                     Message::BlockBodies(v) => {
-                            dbg!(&block_bodies.len(), &chunks.len(), &v.bodies.len());
                             if v.bodies.len() == 1024 && !block_bodies.contains(&v.bodies) {
                                 let bodies = v.bodies;
-                                let block_number = bodies.clone().into_iter().find_map(|v| {
+                                let block_number = bodies.clone().into_iter().filter_map(|v| {
                                     if !v.ommers.is_empty() {
-                                        Some(v.ommers[0].number - v.ommers[0].number.0%1024)
+                                        Some(v.ommers.last().unwrap().number - v.ommers.last().unwrap().number.0%1024)
                                     } else {
                                         None
                                     }
-                                }).unwrap();
+                                }).last().unwrap();
                                 if !chunks.contains_key(&block_number) {
                                     continue;
                                 }
+                                info!("Received new block bodies, left requests={}, bodies total={}", chunks.len(), block_bodies.len());
                                 chunks.remove(&block_number);
                                 block_bodies.insert(bodies);
-                            };
+                            }
                     },
                     _ => continue,
                 };

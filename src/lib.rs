@@ -20,7 +20,8 @@
     const_precise_live_drops,
     const_result,
     const_convert,
-    entry_insert
+    entry_insert,
+    const_mut_refs
 )]
 #![recursion_limit = "256"]
 #![allow(

@@ -107,7 +107,7 @@ impl SentryCoordinator for Coordinator {
     }
     async fn send_body_request(&self, req: Vec<H256>) -> anyhow::Result<()> {
         self.set_status().await?;
-        self.send_message(req.into(), PeerFilter::Random(50))
+        self.send_message(req.into(), PeerFilter::Random(10))
             .await?;
         Ok(())
     }
