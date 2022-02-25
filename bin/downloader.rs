@@ -1,5 +1,4 @@
 use std::{path::PathBuf, sync::Arc};
-
 use akula::{
     sentry::chain_config::ChainsConfig,
     sentry2::{body_downloader::BodyDownloader, downloader::HeaderDownloader, SentryClient},
@@ -55,8 +54,8 @@ async fn main() -> anyhow::Result<()> {
     txn.commit()?;
 
     info!("DB initialized");
-    // let mut hd = HeaderDownloader::new(sentry.clone(), db.begin()?, chain_config.clone())?;
-    // hd.step(db.begin_mutable()?).await?;
+    let mut hd = HeaderDownloader::new(sentry.clone(), db.begin()?, chain_config.clone())?;
+    hd.step(db.begin_mutable()?).await?;
 
     let mut bd = BodyDownloader::new(sentry, db.begin()?, chain_config)?;
     bd.step(db.begin_mutable()?).await?;

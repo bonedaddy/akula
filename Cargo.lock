@@ -337,9 +337,9 @@ checksum = "a4a45a46ab1f2412e53d3a0ade76ffad2025804294569aae387231a0cd6e0899"
 
 [[package]]
 name = "byte-slice-cast"
-version = "1.2.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d30c751592b77c499e7bce34d99d67c2c11bdc0574e9a488ddade14150a4698"
+checksum = "87c5fdd0166095e1d463fc6cc01aa8ce547ad77a4e84d42eb6762b084e28067e"
 
 [[package]]
 name = "byte-unit"
@@ -2423,9 +2423,9 @@ dependencies = [
 
 [[package]]
 name = "scale-info"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d3b4d0b178e3af536f7988303bc73a0766c816de2138c08262015f8ec7be568"
+checksum = "0563970d79bcbf3c537ce3ad36d859b30d36fc5b190efd227f1f7a84d7cf0d42"
 dependencies = [
  "cfg-if",
  "derive_more",
@@ -2730,9 +2730,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.23.3"
+version = "0.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9339fea9ca4725be840dd294b24156ba4fe7aa6b86deac222e99954757ee15e9"
+checksum = "70d06c623c041b6aec9830080e9069b4ab6a84de3b4b4d14b4bbb09c629efdc0"
 dependencies = [
  "cfg-if",
  "core-foundation-sys",

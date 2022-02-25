@@ -99,7 +99,7 @@ tracing-futures = "0.2.5"
 tracing-subscriber = { version = "0.3.9", features = ["env-filter"] }
 triehash = "0.8.4"
 walkdir = "2.3.2"
-hashbrown = "0.12.0"
+hashbrown = { version = "0.12.0", features = ["inline-more"] }
 hashlink = "0.7.0"
 fastrand = "1.7.0"
 

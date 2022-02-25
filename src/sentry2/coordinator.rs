@@ -42,20 +42,17 @@ pub struct Coordinator {
 
 impl Coordinator {
     pub fn new<T: Into<SentryPool>>(sentry: T, chain_config: ChainConfig, status: Status) -> Self {
-        let genesis_hash = chain_config.genesis_block_hash();
-        let network_id = chain_config.network_id().0;
-        let hard_forks = chain_config
-            .chain_spec()
-            .gather_forks()
-            .into_iter()
-            .map(|v| v.0)
-            .collect::<Vec<_>>();
         Self {
             sentries: sentry.into().0,
             status: Arc::new(AtomicStatus::new(status)),
-            genesis_hash,
-            network_id,
-            hard_forks,
+            genesis_hash: chain_config.genesis_block_hash(),
+            network_id: chain_config.network_id().0,
+            hard_forks: chain_config
+                .chain_spec()
+                .gather_forks()
+                .into_iter()
+                .map(|v| v.0)
+                .collect::<Vec<_>>(),
             ping_counter: Arc::new(AtomicU64::new(1)),
         }
     }

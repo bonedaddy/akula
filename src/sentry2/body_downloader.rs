@@ -10,6 +10,7 @@ use crate::{
 };
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::{HashMap, HashSet};
+use itertools::Itertools;
 use mdbx::{EnvironmentKind, RO, RW};
 use std::{ops::ControlFlow, sync::Arc, time::Duration};
 use tracing::info;
@@ -61,38 +62,19 @@ impl BodyDownloader {
                 (last_block_number - block_number, last_block_number)
             };
         let cursor = txn.cursor(tables::CanonicalHeader)?;
-        let requests = cursor
+        let mut chunks = cursor
             .walk(Some(block_number))
-            .map(|v| {
-                if let Ok(v) = v {
-                    if v.0 < last_block_number {
-                        ControlFlow::Continue((v.0, v.1))
-                    } else {
-                        ControlFlow::Break(())
-                    }
-                } else {
-                    unreachable!()
-                }
-            })
-            .filter_map(|v| match v {
-                ControlFlow::Continue(v) => Some(v),
-                ControlFlow::Break(_) => None,
-            })
-            .collect::<HashMap<_, _>>();
-
-        let mut chunks = requests
-            .values()
-            .into_iter()
-            .copied()
+            .map(|v| v.unwrap().1)
             .collect::<Vec<_>>()
             .chunks(1024)
             .enumerate()
-            .map(|(i, v)| (BlockNumber((i as u64) * 1024), v.into()))
+            .map(|(i, v)| (BlockNumber(i as u64 * 1024) + block_number, v.to_vec()))
             .collect::<HashMap<BlockNumber, Vec<_>>>();
+        dbg!(&chunks);
         let mut block_bodies = HashSet::new();
         let mut ticker = tokio::time::interval(Duration::from_secs(30));
 
-        while !requests.is_empty() {
+        while !chunks.is_empty() {
             select! {
             _ = ticker.tick().fuse() => {
                 info!("Resending {} requests", chunks.len());
@@ -106,8 +88,7 @@ impl BodyDownloader {
                 match msg.unwrap().msg {
                     Message::BlockBodies(v) => {
                             if v.bodies.len() == 1024 && !block_bodies.contains(&v.bodies) {
-                                let bodies = v.bodies;
-                                let block_number = bodies.clone().into_iter().filter_map(|v| {
+                                let block_number = v.bodies.clone().into_iter().filter_map(|v| {
                                     if !v.ommers.is_empty() {
                                         Some(v.ommers.last().unwrap().number - v.ommers.last().unwrap().number.0%1024)
                                     } else {
@@ -119,7 +100,7 @@ impl BodyDownloader {
                                 }
                                 info!("Received new block bodies, left requests={}, bodies total={}", chunks.len(), block_bodies.len());
                                 chunks.remove(&block_number);
-                                block_bodies.insert(bodies);
+                                block_bodies.insert(v.bodies);
                             }
                     },
                     _ => continue,
