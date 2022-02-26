@@ -11,7 +11,7 @@ use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::{HashMap, HashSet};
 use mdbx::{EnvironmentKind, RO, RW};
 use std::{sync::Arc, time::Duration};
-use tracing::info;
+use tracing::{info, log::trace};
 
 pub struct BodyDownloader {
     pub sentry: Arc<Coordinator>,
@@ -75,8 +75,7 @@ impl BodyDownloader {
                 )
             })
             .collect::<HashMap<BlockNumber, Vec<_>>>();
-        // take one element of chunks and print it
-        dbg!(chunks.get(&BlockNumber(0)));
+        trace!("Chunks: {:#?}", chunks);
         let mut block_bodies = HashSet::new();
         let mut ticker = tokio::time::interval(Duration::from_secs(30));
 
