@@ -22,12 +22,14 @@ pub struct Penalty {
 }
 
 impl Penalty {
+    #[inline(always)]
     pub const fn new(peer_id: PeerId, kind: PenaltyKind) -> Self {
         Self { peer_id, kind }
     }
 }
 
 impl const From<Penalty> for grpc_sentry::PenalizePeerRequest {
+    #[inline(always)]
     fn from(penalty: Penalty) -> Self {
         grpc_sentry::PenalizePeerRequest {
             peer_id: Some(penalty.peer_id.into()),

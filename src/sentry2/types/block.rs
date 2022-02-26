@@ -44,7 +44,7 @@ impl BlockHashAndNumber {
 pub struct NewBlockHashes(pub Vec<BlockHashAndNumber>);
 
 impl NewBlockHashes {
-    #[inline]
+    #[inline(always)]
     fn new(block_hashes: Vec<(H256, BlockNumber)>) -> Self {
         Self(
             block_hashes

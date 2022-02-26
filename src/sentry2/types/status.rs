@@ -8,10 +8,12 @@ impl AtomicStatus {
         AtomicStatus(AtomicPtr::new(Box::into_raw(Box::new(status))))
     }
 
+    #[inline(always)]
     pub fn load(&self) -> Status {
         unsafe { *self.0.load(std::sync::atomic::Ordering::Relaxed) }
     }
 
+    #[inline(always)]
     pub fn store(&self, status: Status) {
         self.0.store(
             Box::into_raw(Box::new(status)),
@@ -28,6 +30,7 @@ pub struct Status {
 }
 
 impl PartialEq for Status {
+    #[inline(always)]
     fn eq(&self, other: &Status) -> bool {
         self.height == other.height
             && self.hash == other.hash
@@ -36,6 +39,7 @@ impl PartialEq for Status {
 }
 
 impl Status {
+    #[inline(always)]
     pub const fn new(height: u64, hash: H256, total_difficulty: H256) -> Self {
         Self {
             height,

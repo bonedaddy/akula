@@ -300,11 +300,11 @@ where
             )?
             .unwrap();
 
-        let mut starting_index = prev_body.base_tx_id + prev_body.tx_amount as u64;
-        let canonical_header_walker = canonical_header_cur.walk(Some(highest_block + 1));
+        let mut starting_index = prev_body.base_tx_id + prev_body.tx_amount;
+        let canonical_header_walker = canonical_header_cur.walk(Some(highest_block + 1u8));
         pin!(canonical_header_walker);
         let erigon_body_walker =
-            erigon_body_cur.walk(Some(TableEncode::encode(highest_block + 1).to_vec()));
+            erigon_body_cur.walk(Some(TableEncode::encode(highest_block + 1u8).to_vec()));
         pin!(erigon_body_walker);
         let mut batch = Vec::with_capacity(BUFFERING_FACTOR);
         let mut converted = Vec::new();

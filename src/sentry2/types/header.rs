@@ -25,7 +25,7 @@ impl HeaderRequest {
 }
 
 impl const Default for HeaderRequest {
-    #[inline]
+    #[inline(always)]
     fn default() -> Self {
         HeaderRequest {
             start: BlockId::Number(BlockNumber(0)),
@@ -42,6 +42,7 @@ pub struct Announce {
 }
 
 impl Announce {
+    #[inline(always)]
     pub const fn new(hash: H256, number: BlockNumber) -> Self {
         Self { hash, number }
     }
@@ -54,6 +55,7 @@ pub struct GetBlockHeaders {
 }
 
 impl GetBlockHeaders {
+    #[inline(always)]
     pub const fn new(request_id: u64, params: GetBlockHeadersParams) -> Self {
         Self { request_id, params }
     }
@@ -68,6 +70,7 @@ pub struct GetBlockHeadersParams {
 }
 
 impl GetBlockHeadersParams {
+    #[inline(always)]
     pub const fn new(start: BlockId, limit: u64, skip: u64, reverse: u8) -> Self {
         Self {
             start,
@@ -85,6 +88,7 @@ pub struct BlockHeaders {
 }
 
 impl BlockHeaders {
+    #[inline(always)]
     pub const fn new(request_id: u64, headers: Vec<BlockHeader>) -> Self {
         Self {
             request_id,

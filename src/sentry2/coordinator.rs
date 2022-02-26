@@ -1,8 +1,9 @@
 use crate::{
     models::{Block, BlockNumber, H256, U256},
     sentry::chain_config::ChainConfig,
-    sentry2::types::*,
+    sentry2::{types::*, CHUNK_SIZE},
 };
+use arrayvec::ArrayVec;
 use async_trait::async_trait;
 use auto_impl::auto_impl;
 use ethereum_interfaces::sentry as grpc_sentry;
@@ -41,6 +42,7 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
+    #[inline]
     pub fn new<T, C>(sentry: T, chain_config: C, status: Status) -> Self
     where
         T: Into<SentryPool>,
@@ -62,6 +64,7 @@ impl Coordinator {
         }
     }
 
+    #[inline(always)]
     pub fn last_ping(&self) -> BlockNumber {
         BlockNumber(self.ping_counter.load(std::sync::atomic::Ordering::Relaxed))
     }
@@ -74,10 +77,12 @@ pub type SentryInboundStream = futures_util::stream::Map<
 
 #[async_trait]
 impl SentryCoordinator for Coordinator {
+    #[inline(always)]
     fn update_status(&self, status: Status) -> anyhow::Result<()> {
         self.status.store(status);
         Ok(())
     }
+    #[inline(always)]
     async fn set_status(&self) -> anyhow::Result<()> {
         let status = self.status.load();
         let status_data = grpc_sentry::StatusData {
@@ -107,12 +112,14 @@ impl SentryCoordinator for Coordinator {
 
         Ok(())
     }
-    async fn send_body_request(&self, req: Vec<H256>) -> anyhow::Result<()> {
+    #[inline(always)]
+    async fn send_body_request(&self, req: ArrayVec<H256, CHUNK_SIZE>) -> anyhow::Result<()> {
         self.set_status().await?;
         self.send_message(req.into(), PeerFilter::Random(10))
             .await?;
         Ok(())
     }
+    #[inline(always)]
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()> {
         self.set_status().await?;
         self.send_message(req.into(), PeerFilter::Random(50))
@@ -120,6 +127,7 @@ impl SentryCoordinator for Coordinator {
 
         Ok(())
     }
+    #[inline(always)]
     async fn recv(&self) -> anyhow::Result<CoordinatorStream> {
         self.set_status().await?;
 
@@ -144,6 +152,7 @@ impl SentryCoordinator for Coordinator {
         ))
     }
 
+    #[inline(always)]
     async fn recv_headers(&self) -> anyhow::Result<CoordinatorStream> {
         self.set_status().await?;
 
@@ -215,6 +224,7 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
 
+    #[inline(always)]
     async fn ping(&self) -> anyhow::Result<()> {
         let _ = self
             .send_header_request(HeaderRequest {
@@ -230,6 +240,7 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
 
+    #[inline(always)]
     async fn send_message(&self, msg: Message, predicate: PeerFilter) -> anyhow::Result<()> {
         let data = grpc_sentry::OutboundMessageData {
             id: grpc_sentry::MessageId::from(msg.id()) as i32,
@@ -303,6 +314,7 @@ impl SentryCoordinator for Coordinator {
     }
 }
 
+#[inline(always)]
 async fn recv_sentry(s: &SentryClient, ids: Vec<i32>) -> SingleSentryStream {
     let mut s = s.clone();
     s.hand_shake(tonic::Request::new(())).await.unwrap();
@@ -318,6 +330,7 @@ pub struct SingleSentryStream(tonic::codec::Streaming<grpc_sentry::InboundMessag
 
 pub type CoordinatorStream = futures_util::stream::SelectAll<SingleSentryStream>;
 
+#[inline(always)]
 pub async fn broadcast_stream<T, S>(mut stream: S, tx: broadcast::Sender<T>)
 where
     S: Stream<Item = T> + Unpin,
@@ -330,6 +343,7 @@ where
 impl tokio_stream::Stream for SingleSentryStream {
     type Item = InboundMessage;
 
+    #[inline(always)]
     fn poll_next(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -361,7 +375,7 @@ impl tokio_stream::Stream for SingleSentryStream {
 pub trait SentryCoordinator: Send + Sync {
     fn update_status(&self, status: Status) -> anyhow::Result<()>;
     async fn set_status(&self) -> anyhow::Result<()>;
-    async fn send_body_request(&self, req: Vec<H256>) -> anyhow::Result<()>;
+    async fn send_body_request(&self, req: ArrayVec<H256, CHUNK_SIZE>) -> anyhow::Result<()>;
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()>;
     async fn recv(&self) -> anyhow::Result<CoordinatorStream>;
     async fn recv_headers(&self) -> anyhow::Result<CoordinatorStream>;

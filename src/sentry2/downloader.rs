@@ -43,6 +43,7 @@ pub struct HeaderDownloader {
 }
 
 impl HeaderDownloader {
+    #[inline]
     pub fn new<T, C, E>(
         conn: T,
         chain_config: C,
@@ -63,12 +64,11 @@ impl HeaderDownloader {
             .get(tables::LastHeader, VariableVec::default())?
             .unwrap();
 
-        let (found_tip, (height, canonical_marker)) =
-            if chain_height.0 - block_number.0 > BATCH_SIZE {
-                (true, (chain_height, chain_hash))
-            } else {
-                (false, (block_number, hash))
-            };
+        let (found_tip, (height, canonical_marker)) = if chain_height - block_number > BATCH_SIZE {
+            (true, (chain_height, chain_hash))
+        } else {
+            (false, (block_number, hash))
+        };
         let td = txn
             .get(tables::HeadersTotalDifficulty, (block_number, hash))?
             .unwrap_or_else(|| chain_config.chain_spec().genesis.seal.difficulty())
@@ -84,12 +84,13 @@ impl HeaderDownloader {
             height,
             canonical_marker,
             found_tip,
-            seen_announces: LruCache::new(CHUNK_SIZE as usize),
+            seen_announces: LruCache::new(CHUNK_SIZE),
             blocks_table: Default::default(),
             parents_table: Default::default(),
         })
     }
 
+    #[inline]
     pub async fn step<E: EnvironmentKind>(
         &mut self,
         txn: MdbxTransaction<'_, RW, E>,
@@ -115,11 +116,11 @@ impl HeaderDownloader {
         let batch_size = if self.height - block_number <= BlockNumber(BATCH_SIZE as u64) {
             self.height - block_number
         } else {
-            BlockNumber(BATCH_SIZE)
+            BlockNumber(BATCH_SIZE as u64)
         };
 
-        let mut headers = Vec::<BlockHeader>::with_capacity(batch_size.0 as usize);
-        while headers.len() < batch_size.0 as usize {
+        let mut headers = Vec::<BlockHeader>::with_capacity(batch_size.into());
+        while headers.len() < batch_size.into() {
             if !headers.is_empty() {
                 let last = headers.last().unwrap();
                 (block_number, hash) = (last.number, last.hash());
@@ -135,6 +136,7 @@ impl HeaderDownloader {
         Ok(())
     }
 
+    #[inline]
     async fn collect_headers(
         &self,
         stream: &mut CoordinatorStream,
@@ -145,7 +147,7 @@ impl HeaderDownloader {
         let mut requests = Self::prepare_requests(start, hash, end);
 
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
-        let mut headers = Vec::with_capacity(BATCH_SIZE as usize);
+        let mut headers = Vec::with_capacity(BATCH_SIZE);
         while !requests.is_empty() {
             select! {
                 _ = ticker.tick().fuse() => {
@@ -161,10 +163,10 @@ impl HeaderDownloader {
                     match msg.unwrap().msg {
                         Message::BlockHeaders(v) => {
                             if !v.headers.is_empty() && requests.contains_key(&v.headers[0].number)
-                            && (v.headers.len() == CHUNK_SIZE as usize
+                            && (v.headers.len() == CHUNK_SIZE
                             || v.headers.len() == requests.get(&v.headers[0].number).unwrap().limit as usize)
-                            && (v.headers.last().unwrap().number + 1 == v.headers[0].number + CHUNK_SIZE
-                                || v.headers.last().unwrap().number + 1
+                            && (v.headers.last().unwrap().number + 1u8 == v.headers[0].number + CHUNK_SIZE
+                                || v.headers.last().unwrap().number + 1u8
                                     == v.headers[0].number + requests.get(&v.headers[0].number).unwrap().limit)
                              {
                                 assert!(requests.remove(&v.headers[0].number).is_some());
@@ -180,6 +182,7 @@ impl HeaderDownloader {
         Ok(headers)
     }
 
+    #[inline]
     /// Verifies given block headers and partially invalidates them if necessary.
     fn verify_chunks(headers: &mut Vec<BlockHeader>) {
         headers.par_sort_unstable_by_key(|v| v.number);
@@ -190,7 +193,7 @@ impl HeaderDownloader {
             .enumerate()
             .skip(1)
             .for_each(|(i, header)| {
-                if header.number != headers[i - 1].number + 1
+                if header.number != headers[i - 1].number + 1u8
                     || header.parent_hash != headers[i - 1].hash()
                     || header.timestamp < headers[i - 1].timestamp
                 {
@@ -220,6 +223,7 @@ impl HeaderDownloader {
         }
     }
 
+    #[inline]
     /// Flushes step progress.
     fn flush<E: EnvironmentKind>(
         &mut self,
@@ -251,6 +255,7 @@ impl HeaderDownloader {
         Ok(())
     }
 
+    #[inline]
     async fn evaluate_chain_tip(&mut self, stream: &mut CoordinatorStream) -> anyhow::Result<()> {
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
         self.found_tip = false;
@@ -335,6 +340,7 @@ impl HeaderDownloader {
         Ok(())
     }
 
+    #[inline]
     fn prepare_requests(
         start: BlockNumber,
         hash: H256,
@@ -348,7 +354,7 @@ impl HeaderDownloader {
                     HeaderRequest {
                         start: i.into(),
                         limit: if i + CHUNK_SIZE < end {
-                            CHUNK_SIZE
+                            CHUNK_SIZE as u64
                         } else {
                             (end - i).0
                         },
@@ -372,6 +378,7 @@ impl HeaderDownloader {
         requests
     }
 
+    #[inline]
     /// Finds chain tip if it's possible at the given moment.
     async fn try_find_tip(&mut self) -> anyhow::Result<bool> {
         let possible_tips = self

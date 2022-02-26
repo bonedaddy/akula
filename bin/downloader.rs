@@ -1,7 +1,9 @@
 use akula::{
     kv::tables,
     sentry::chain_config::ChainConfig,
-    sentry2::{downloader::HeaderDownloader, SentryClient},
+    sentry2::{
+        body_downloader::BodyDownloader, downloader::HeaderDownloader, SentryClient, BATCH_SIZE,
+    },
 };
 use anyhow::Context;
 use clap::Parser;
@@ -21,6 +23,10 @@ struct Args {
     /// Sentry address
     #[clap(long = "addr")]
     addr: String,
+
+    /// Header downloader-only mode.
+    #[clap(long = "header-only")]
+    header_only: bool,
 }
 
 #[tokio::main]
@@ -46,9 +52,27 @@ async fn main() -> anyhow::Result<()> {
     )?;
     txn.commit()?;
 
-    HeaderDownloader::new(sentry, chain_config, db.begin()?)?
-        .step(db.begin_mutable()?)
-        .await?;
+    let block_number = db
+        .begin()?
+        .cursor(tables::CanonicalHeader)?
+        .last()?
+        .map(|(v, _)| v)
+        .unwrap();
+
+    let mut hd = HeaderDownloader::new(sentry.clone(), chain_config.clone(), db.begin()?)?;
+    let mut bd = BodyDownloader::new(sentry, chain_config, db.begin()?)?;
+
+    while block_number < BATCH_SIZE
+        || block_number
+            < db.begin()?
+                .cursor(tables::LastHeader)?
+                .last()?
+                .map(|(_, (v, _))| v)
+                .unwrap()
+    {
+        hd.step(db.begin_mutable()?).await?;
+        bd.step(db.begin_mutable()?).await?;
+    }
 
     Ok(())
 }

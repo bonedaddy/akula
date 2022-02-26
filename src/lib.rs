@@ -24,7 +24,10 @@
     const_convert,
     entry_insert,
     const_mut_refs,
-    derive_default_enum
+    derive_default_enum,
+    control_flow_enum,
+    const_num_from_num,
+    array_chunks
 )]
 #![recursion_limit = "256"]
 #![allow(

@@ -81,7 +81,7 @@ impl ChainsConfig {
 
     pub fn get(&self, chain_name: &str) -> anyhow::Result<ChainConfig> {
         self.0
-            .get(chain_name)
+            .get(&chain_name.to_lowercase())
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Unsupported chain: {}", chain_name))
     }
