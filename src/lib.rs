@@ -16,12 +16,15 @@
     let_chains,
     associated_type_bounds,
     const_trait_impl,
+    const_impl_trait,
+    allow_internal_unstable,
     const_fn_trait_bound,
     const_precise_live_drops,
     const_result,
     const_convert,
     entry_insert,
-    const_mut_refs
+    const_mut_refs,
+    derive_default_enum
 )]
 #![recursion_limit = "256"]
 #![allow(

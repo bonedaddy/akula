@@ -41,7 +41,12 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
-    pub fn new<T: Into<SentryPool>>(sentry: T, chain_config: ChainConfig, status: Status) -> Self {
+    pub fn new<T, C>(sentry: T, chain_config: C, status: Status) -> Self
+    where
+        T: Into<SentryPool>,
+        C: Into<ChainConfig>,
+    {
+        let chain_config = chain_config.into();
         Self {
             sentries: sentry.into().0,
             status: Arc::new(AtomicStatus::new(status)),

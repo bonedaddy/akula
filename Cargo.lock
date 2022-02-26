@@ -50,6 +50,8 @@ dependencies = [
  "ethereum-types",
  "ethnum",
  "fastrand",
+ "fastrlp",
+ "fastrlp-derive",
  "fdlimit",
  "futures-core",
  "futures-util",
@@ -733,9 +735,9 @@ checksum = "e78d4f1cc4ae33bbfc157ed5d5a5ef3bc29227303d595861deb238fcec4e9457"
 
 [[package]]
 name = "enum-as-inner"
-version = "0.3.4"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "570d109b813e904becc80d8d5da38376818a143348413f7149f1340fe04754d4"
+checksum = "21cdad81446a7f7dc43f6a77409efeb9733d2fa65553efef6018ef257c959b73"
 dependencies = [
  "heck 0.4.0",
  "proc-macro2",
@@ -882,6 +884,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3fcf0cee53519c866c09b5de1f6c56ff9d647101f81c1964fa632e148896cdf"
 dependencies = [
  "instant",
+]
+
+[[package]]
+name = "fastrlp"
+version = "0.1.0"
+source = "git+https://github.com/vorot93/fastrlp?branch=derive#d6fbc3c67f6ec6de39e0de35487f0f407c45c75c"
+dependencies = [
+ "arrayvec",
+ "auto_impl",
+ "bytes",
+ "ethereum-types",
+ "ethnum",
+ "fastrlp-derive",
+]
+
+[[package]]
+name = "fastrlp-derive"
+version = "0.1.0"
+source = "git+https://github.com/vorot93/fastrlp?branch=derive#d6fbc3c67f6ec6de39e0de35487f0f407c45c75c"
+dependencies = [
+ "bytes",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

@@ -43,24 +43,32 @@ pub struct HeaderDownloader {
 }
 
 impl HeaderDownloader {
-    pub fn new<T: Into<SentryPool>, E: EnvironmentKind>(
+    pub fn new<T, C, E>(
         conn: T,
+        chain_config: C,
         txn: MdbxTransaction<'_, RO, E>,
-        chain_config: ChainConfig,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<Self>
+    where
+        T: Into<SentryPool>,
+        C: Into<ChainConfig>,
+        E: EnvironmentKind,
+    {
+        let chain_config = chain_config.into();
+
         let (block_number, hash) = txn
             .cursor(tables::CanonicalHeader)?
             .last()?
             .unwrap_or((0.into(), chain_config.genesis_block_hash()));
-        let (found_tip, (height, canonical_marker)) = if block_number.0 > BATCH_SIZE {
-            (
-                true,
-                txn.get(tables::LastHeader, VariableVec::default())?
-                    .unwrap(),
-            )
-        } else {
-            (false, (block_number, hash))
-        };
+        let (chain_height, chain_hash) = txn
+            .get(tables::LastHeader, VariableVec::default())?
+            .unwrap();
+
+        let (found_tip, (height, canonical_marker)) =
+            if chain_height.0 - block_number.0 > BATCH_SIZE {
+                (true, (chain_height, chain_hash))
+            } else {
+                (false, (block_number, hash))
+            };
         let td = txn
             .get(tables::HeadersTotalDifficulty, (block_number, hash))?
             .unwrap_or_else(|| chain_config.chain_spec().genesis.seal.difficulty())
@@ -353,9 +361,10 @@ impl HeaderDownloader {
             start,
             HeaderRequest {
                 start: hash.into(),
-                limit: match start + (CHUNK_SIZE as u64) < end {
-                    true => CHUNK_SIZE as u64,
-                    false => (end - start).0,
+                limit: if start + (CHUNK_SIZE as u64) < end {
+                    CHUNK_SIZE as u64
+                } else {
+                    (end - start).0
                 },
                 ..Default::default()
             },

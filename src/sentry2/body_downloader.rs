@@ -18,16 +18,21 @@ pub struct BodyDownloader {
 }
 
 impl BodyDownloader {
-    pub fn new<T: Into<SentryPool>, E: EnvironmentKind>(
+    pub fn new<T, C, E>(
         conn: T,
+        chain_config: C,
         txn: MdbxTransaction<'_, RO, E>,
-        chain_config: ChainConfig,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<Self>
+    where
+        T: Into<SentryPool>,
+        C: Into<ChainConfig>,
+        E: EnvironmentKind,
+    {
         let block = txn.cursor(tables::CanonicalHeader)?.last()?.unwrap();
         Ok(Self {
             sentry: Arc::new(Coordinator::new(
                 conn,
-                chain_config,
+                chain_config.into(),
                 Status::new(
                     block.0 .0,
                     block.1,
@@ -70,7 +75,8 @@ impl BodyDownloader {
                 )
             })
             .collect::<HashMap<BlockNumber, Vec<_>>>();
-        dbg!(&chunks);
+        // take one element of chunks and print it
+        dbg!(chunks.get(&BlockNumber(0)));
         let mut block_bodies = HashSet::new();
         let mut ticker = tokio::time::interval(Duration::from_secs(30));
 

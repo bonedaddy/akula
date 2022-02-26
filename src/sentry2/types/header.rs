@@ -29,7 +29,7 @@ impl const Default for HeaderRequest {
     fn default() -> Self {
         HeaderRequest {
             start: BlockId::Number(BlockNumber(0)),
-            limit: 192,
+            limit: 1024,
             skip: 0,
             reverse: false,
         }

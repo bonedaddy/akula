@@ -2,7 +2,7 @@ use crate::{
     genesis::GenesisState,
     models::{ChainSpec, NetworkId, *},
 };
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 pub struct ChainsConfig(HashMap<String, ChainConfig>);
 
@@ -12,12 +12,24 @@ pub struct ChainConfig {
     genesis_block_hash: H256,
 }
 
+impl Default for ChainsConfig {
+    fn default() -> Self {
+        ChainsConfig::new()
+    }
+}
+
+impl TryFrom<String> for ChainConfig {
+    type Error = anyhow::Error;
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        ChainsConfig::default().get(&name)
+    }
+}
+
 impl ChainConfig {
     fn new(chain_spec: ChainSpec) -> Self {
         let genesis = GenesisState::new(chain_spec.clone());
         let genesis_header = genesis.header(&genesis.initial_state());
         let genesis_block_hash = genesis_header.hash();
-
         Self {
             chain_spec,
             genesis_block_hash,
@@ -41,48 +53,42 @@ impl ChainConfig {
     }
 
     pub fn fork_block_numbers(&self) -> Vec<BlockNumber> {
-        self.chain_spec.gather_forks().iter().copied().collect()
-    }
-}
-
-impl Default for ChainsConfig {
-    fn default() -> Self {
-        Self::new()
+        self.chain_spec.gather_forks().into_iter().collect()
     }
 }
 
 impl ChainsConfig {
     pub fn new() -> Self {
-        let mut configs = HashMap::<String, ChainConfig>::new();
-        configs.insert(
-            String::from("mainnet"),
-            ChainConfig::new(crate::res::chainspec::MAINNET.clone()),
-        );
-        configs.insert(
-            String::from("ethereum"),
-            ChainConfig::new(crate::res::chainspec::MAINNET.clone()),
-        );
-        configs.insert(
-            String::from("ropsten"),
-            ChainConfig::new(crate::res::chainspec::ROPSTEN.clone()),
-        );
-        configs.insert(
-            String::from("rinkeby"),
-            ChainConfig::new(crate::res::chainspec::RINKEBY.clone()),
-        );
-        ChainsConfig(configs)
+        ChainsConfig(HashMap::from([
+            (
+                "mainnet".to_owned(),
+                ChainConfig::new(crate::res::chainspec::MAINNET.clone()),
+            ),
+            (
+                "ethereum".to_owned(),
+                ChainConfig::new(crate::res::chainspec::MAINNET.clone()),
+            ),
+            (
+                "ropsten".to_owned(),
+                ChainConfig::new(crate::res::chainspec::ROPSTEN.clone()),
+            ),
+            (
+                "rinkeby".to_owned(),
+                ChainConfig::new(crate::res::chainspec::RINKEBY.clone()),
+            ),
+        ]))
     }
 
     pub fn get(&self, chain_name: &str) -> anyhow::Result<ChainConfig> {
         self.0
-            .get(&chain_name.to_lowercase())
+            .get(chain_name)
             .cloned()
-            .ok_or_else(|| anyhow::format_err!("unknown chain '{}'", chain_name))
+            .ok_or_else(|| anyhow::anyhow!("Unsupported chain: {}", chain_name))
     }
 }
 
 impl ChainsConfig {
-    pub fn chain_names(&self) -> Vec<&str> {
-        self.0.keys().map(|k| k.as_str()).collect::<Vec<&str>>()
+    pub fn chain_names(&self) -> Vec<&String> {
+        self.0.keys().collect()
     }
 }
