@@ -1,11 +1,11 @@
-use std::{path::PathBuf, sync::Arc};
 use akula::{
     sentry::chain_config::ChainsConfig,
-    sentry2::{body_downloader::BodyDownloader, downloader::HeaderDownloader, SentryClient},
+    sentry2::{downloader::HeaderDownloader, SentryClient},
 };
 use anyhow::Context;
 use clap::Parser;
-use tracing::info;
+use std::{path::PathBuf, sync::Arc};
+
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -50,15 +50,11 @@ async fn main() -> anyhow::Result<()> {
         ),
         chain_config.chain_spec().clone(),
     )?;
-
     txn.commit()?;
 
-    info!("DB initialized");
-    let mut hd = HeaderDownloader::new(sentry.clone(), db.begin()?, chain_config.clone())?;
-    hd.step(db.begin_mutable()?).await?;
-
-    let mut bd = BodyDownloader::new(sentry, db.begin()?, chain_config)?;
-    bd.step(db.begin_mutable()?).await?;
+    HeaderDownloader::new(sentry, db.begin()?, chain_config.clone())?
+        .step(db.begin_mutable()?)
+        .await?;
 
     Ok(())
 }

@@ -250,7 +250,7 @@ where
         let header_key: HeaderKey = (block_num, header_hash);
 
         tx.set(tables::CanonicalHeader, block_num, header_hash)?;
-        tx.set(tables::LastHeader, Default::default(), header_hash)?;
+        tx.set(tables::LastHeader, Default::default(), header_key)?;
 
         let total_difficulty_opt = Self::header_total_difficulty(header, tx)?;
         if let Some(total_difficulty) = total_difficulty_opt {
@@ -276,7 +276,7 @@ where
         // update LastHeader to point to unwind_to_block_num
         let last_header_hash_opt = tx.get(tables::CanonicalHeader, unwind_to_block_num)?;
         if let Some(hash) = last_header_hash_opt {
-            tx.set(tables::LastHeader, Default::default(), hash)?;
+            tx.set(tables::LastHeader, Default::default(), (0.into(), hash))?;
         } else {
             anyhow::bail!(
                 "unwind: not found header hash of the top block after unwind {}",

@@ -138,7 +138,11 @@ where
     txn.set(tables::TotalGas, genesis, 0)?;
     txn.set(tables::TotalTx, genesis, 0)?;
 
-    txn.set(tables::LastHeader, Default::default(), block_hash)?;
+    txn.set(
+        tables::LastHeader,
+        Default::default(),
+        (genesis, block_hash),
+    )?;
 
     txn.set(tables::Config, block_hash, chainspec)?;
 

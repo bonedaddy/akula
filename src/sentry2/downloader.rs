@@ -1,15 +1,18 @@
 use crate::{
-    kv::{mdbx::MdbxTransaction, tables},
+    kv::{
+        mdbx::MdbxTransaction,
+        tables::{self, VariableVec},
+    },
     models::{BlockHeader, BlockNumber, H256},
     sentry::chain_config::ChainConfig,
     sentry2::{
         types::{HeaderRequest, Message, Status},
-        Coordinator, SentryCoordinator, SentryPool,
+        Coordinator, CoordinatorStream, SentryCoordinator, SentryPool, BATCH_SIZE, CHUNK_SIZE,
     },
 };
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::HashMap;
-use hashlink::{LinkedHashMap, LinkedHashSet};
+use hashlink::{LinkedHashMap, LinkedHashSet, LruCache};
 use mdbx::{EnvironmentKind, RO, RW};
 use rayon::{
     iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
@@ -21,27 +24,22 @@ use std::{
 };
 use tracing::info;
 
-use super::CoordinatorStream;
-
-const BATCH_SIZE: usize = 3 << 15;
-const CHUNK_SIZE: usize = 1 << 10;
-
 pub struct HeaderDownloader {
     /// Sentry connector.
     pub sentry: Arc<Coordinator>,
     /// Our current height.
     pub height: BlockNumber,
+    /// The hash known to belong to the canonical chain(defaults to our latest checkpoint or
+    /// genesis).
+    pub canonical_marker: H256,
+    /// Whethere we found chain tip or not.
+    pub found_tip: bool,
     /// The set of newly seen hashes.
-    pub seen_announces: LinkedHashSet<H256>,
+    pub seen_announces: LruCache<H256, ()>,
     /// Mapping from the child hash to the parent hash.
     pub parents_table: HashMap<H256, H256>,
     /// Mapping from the block hash to it's number and optionally total difficulty.
     pub blocks_table: HashMap<H256, (BlockNumber, Option<u128>)>,
-    /// The hash known to belong to the canonical chain(defaults to our latest checkpoint or
-    /// genesis).
-    pub canonical_marker: H256,
-
-    pub found_tip: bool,
 }
 
 impl HeaderDownloader {
@@ -50,27 +48,37 @@ impl HeaderDownloader {
         txn: MdbxTransaction<'_, RO, E>,
         chain_config: ChainConfig,
     ) -> anyhow::Result<Self> {
-        let block = txn
+        let (block_number, hash) = txn
             .cursor(tables::CanonicalHeader)?
             .last()?
             .unwrap_or((0.into(), chain_config.genesis_block_hash()));
+        let (found_tip, (height, canonical_marker)) = if block_number.0 > BATCH_SIZE {
+            (
+                true,
+                txn.get(tables::LastHeader, VariableVec::default())?
+                    .unwrap(),
+            )
+        } else {
+            (false, (block_number, hash))
+        };
         let td = txn
-            .get(tables::HeadersTotalDifficulty, block)?
+            .get(tables::HeadersTotalDifficulty, (block_number, hash))?
             .unwrap_or_else(|| chain_config.chain_spec().genesis.seal.difficulty())
             .to_be_bytes()
             .into();
+
         Ok(Self {
             sentry: Arc::new(Coordinator::new(
                 conn,
                 chain_config,
-                Status::new(block.0 .0, block.1, td),
+                Status::new(block_number.0, hash, td),
             )),
-            height: block.0,
-            seen_announces: LinkedHashSet::new(),
-            parents_table: HashMap::new(),
-            blocks_table: HashMap::new(),
-            canonical_marker: block.1,
-            found_tip: false,
+            height,
+            canonical_marker,
+            found_tip,
+            seen_announces: LruCache::new(CHUNK_SIZE as usize),
+            blocks_table: Default::default(),
+            parents_table: Default::default(),
         })
     }
 
@@ -79,10 +87,15 @@ impl HeaderDownloader {
         txn: MdbxTransaction<'_, RW, E>,
     ) -> anyhow::Result<()> {
         let mut stream = self.sentry.recv().await?;
-
         if !self.found_tip {
             self.evaluate_chain_tip(&mut stream).await?;
             assert!(self.found_tip);
+
+            txn.set(
+                tables::LastHeader,
+                VariableVec::default(),
+                (self.height, self.canonical_marker),
+            )?;
         }
 
         let (mut block_number, mut hash) = txn
@@ -94,7 +107,7 @@ impl HeaderDownloader {
         let batch_size = if self.height - block_number <= BlockNumber(BATCH_SIZE as u64) {
             self.height - block_number
         } else {
-            BlockNumber(BATCH_SIZE as u64)
+            BlockNumber(BATCH_SIZE)
         };
 
         let mut headers = Vec::<BlockHeader>::with_capacity(batch_size.0 as usize);
@@ -124,14 +137,13 @@ impl HeaderDownloader {
         let mut requests = Self::prepare_requests(start, hash, end);
 
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
-        let mut headers = Vec::with_capacity(BATCH_SIZE);
+        let mut headers = Vec::with_capacity(BATCH_SIZE as usize);
         while !requests.is_empty() {
             select! {
                 _ = ticker.tick().fuse() => {
                     let _ = requests.clone().into_iter().map(|(_,req)| {
                         let sentry = self.sentry.clone();
                         tokio::spawn(async move {
-                            info!("Request {:#?}", &req);
                             let _ = sentry.send_header_request(req).await;
                         })
                     }).collect::<FuturesUnordered<_>>().map(|_| ()).collect::<()>();
@@ -141,9 +153,9 @@ impl HeaderDownloader {
                     match msg.unwrap().msg {
                         Message::BlockHeaders(v) => {
                             if !v.headers.is_empty() && requests.contains_key(&v.headers[0].number)
-                            && (v.headers.len() == CHUNK_SIZE
+                            && (v.headers.len() == CHUNK_SIZE as usize
                             || v.headers.len() == requests.get(&v.headers[0].number).unwrap().limit as usize)
-                            && (v.headers.last().unwrap().number + 1 == v.headers[0].number + (CHUNK_SIZE as u64)
+                            && (v.headers.last().unwrap().number + 1 == v.headers[0].number + CHUNK_SIZE
                                 || v.headers.last().unwrap().number + 1
                                     == v.headers[0].number + requests.get(&v.headers[0].number).unwrap().limit)
                              {
@@ -264,10 +276,10 @@ impl HeaderDownloader {
                     if msg.is_none() { continue; }
                     match msg.unwrap().msg {
                         Message::NewBlockHashes(v) => {
-                            if !v.0.is_empty() && !self.seen_announces.contains(&v.0.last().unwrap().hash)
+                            if !v.0.is_empty() && !self.seen_announces.contains_key(&v.0.last().unwrap().hash)
                             && v.0.last().unwrap().number >= self.height {
                                 let block = v.0.last().unwrap();
-                                self.seen_announces.insert(block.hash);
+                                self.seen_announces.insert(block.hash, ());
                                 self.sentry.send_header_request(HeaderRequest {
                                     start: block.hash.into(),
                                     limit: 1,
@@ -321,15 +333,16 @@ impl HeaderDownloader {
         end: BlockNumber,
     ) -> LinkedHashMap<BlockNumber, HeaderRequest> {
         let mut requests = (start..end)
-            .step_by(CHUNK_SIZE)
+            .step_by(CHUNK_SIZE as usize)
             .map(|i| {
                 (
                     i,
                     HeaderRequest {
                         start: i.into(),
-                        limit: match i + (CHUNK_SIZE as u64) < end {
-                            true => CHUNK_SIZE as u64,
-                            false => (end - i).0,
+                        limit: if i + CHUNK_SIZE < end {
+                            CHUNK_SIZE
+                        } else {
+                            (end - i).0
                         },
                         ..Default::default()
                     },
