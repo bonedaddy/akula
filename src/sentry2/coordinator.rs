@@ -16,7 +16,6 @@ use tokio::sync::broadcast;
 
 #[derive(Clone, Debug)]
 pub struct SentryPool(pub Vec<SentryClient>);
-
 impl From<SentryClient> for SentryPool {
     #[inline(always)]
     fn from(sentry: SentryClient) -> Self {
@@ -62,8 +61,8 @@ impl Coordinator {
             ping_counter: Arc::new(AtomicU64::new(1)),
         }
     }
-
     #[inline(always)]
+    /// Returns latest ping value.
     pub fn last_ping(&self) -> BlockNumber {
         BlockNumber(self.ping_counter.load(std::sync::atomic::Ordering::Relaxed))
     }
@@ -77,11 +76,13 @@ pub type SentryInboundStream = futures_util::stream::Map<
 #[async_trait]
 impl SentryCoordinator for Coordinator {
     #[inline(always)]
+    /// Updates status atomic variable.
     fn update_status(&self, status: Status) -> anyhow::Result<()> {
         self.status.store(status);
         Ok(())
     }
     #[inline(always)]
+    /// Updates status atomic variable, and sets new status for each sentry.
     async fn set_status(&self) -> anyhow::Result<()> {
         let status = self.status.load();
         let status_data = grpc_sentry::StatusData {
@@ -112,6 +113,7 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
     #[inline(always)]
+    /// Send body request using given `HashChunk`.
     async fn send_body_request(&self, req: HashChunk) -> anyhow::Result<()> {
         self.set_status().await?;
         self.send_message(req.into(), PeerFilter::Random(10))
@@ -119,6 +121,7 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
     #[inline(always)]
+    /// Sends given header request.
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()> {
         self.set_status().await?;
         self.send_message(req.into(), PeerFilter::Random(50))
@@ -127,6 +130,7 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
     #[inline(always)]
+    /// Creates a stream of inbound messages utilizing all sentries in the pool.
     async fn recv(&self) -> anyhow::Result<CoordinatorStream> {
         self.set_status().await?;
 
@@ -150,8 +154,8 @@ impl SentryCoordinator for Coordinator {
             .await,
         ))
     }
-
     #[inline(always)]
+    /// Creates a stream of inbound headers utilizing all sentries in the pool.
     async fn recv_headers(&self) -> anyhow::Result<CoordinatorStream> {
         self.set_status().await?;
 
@@ -170,26 +174,27 @@ impl SentryCoordinator for Coordinator {
             .await,
         ))
     }
-
     #[inline(always)]
+    /// Broadcasts a new block to the peers.
     async fn broadcast_block(&self, _block: Block, _total_difficulty: u128) -> anyhow::Result<()> {
         let _fut = async move || {};
         Ok(())
     }
     #[inline(always)]
+    /// Propagates new block hashes to peers.
     async fn propagate_new_block_hashes(
         &self,
         _block_hashes: Vec<(H256, BlockNumber)>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
-
     #[inline(always)]
+    /// Propagates given transaction hashes.
     async fn propagate_transactions(&self, _transactions: Vec<H256>) -> anyhow::Result<()> {
         Ok(())
     }
-
     #[inline(always)]
+    /// Updates the head for each sentry in the pool.
     async fn update_head(
         &self,
         height: BlockNumber,
@@ -203,8 +208,8 @@ impl SentryCoordinator for Coordinator {
 
         Ok(())
     }
-
     #[inline(always)]
+    /// Penalizes a peer using given penalty.
     async fn penalize_peer(&self, penalty: Penalty) -> anyhow::Result<()> {
         let _ = self
             .sentries
@@ -227,8 +232,8 @@ impl SentryCoordinator for Coordinator {
 
         Ok(())
     }
-
     #[inline(always)]
+    /// Sends `ping` to a sentry server.
     async fn ping(&self) -> anyhow::Result<()> {
         let _ = self
             .send_header_request(HeaderRequest {
@@ -243,8 +248,8 @@ impl SentryCoordinator for Coordinator {
             .await;
         Ok(())
     }
-
     #[inline(always)]
+    /// Sends a message using pool of sentries.
     async fn send_message(&self, msg: Message, predicate: PeerFilter) -> anyhow::Result<()> {
         let data = grpc_sentry::OutboundMessageData {
             id: grpc_sentry::MessageId::from(msg.id()) as i32,
@@ -293,8 +298,8 @@ impl SentryCoordinator for Coordinator {
 
         Ok(())
     }
-
     #[inline(always)]
+    /// Returns sum of peers of all sentries.
     async fn peer_count(&self) -> anyhow::Result<u64> {
         let peer_count: u64 = futures_util::future::join_all(
             self.sentries
@@ -320,6 +325,7 @@ impl SentryCoordinator for Coordinator {
 }
 
 #[inline(always)]
+/// Creates a SingleSentryStream from a reference to a SentryClient, and vector of message IDs.
 async fn recv_sentry(s: &SentryClient, ids: Vec<i32>) -> SingleSentryStream {
     let mut s = s.clone();
     s.hand_shake(tonic::Request::new(())).await.unwrap();
@@ -336,6 +342,7 @@ pub struct SingleSentryStream(tonic::codec::Streaming<grpc_sentry::InboundMessag
 pub type CoordinatorStream = futures_util::stream::SelectAll<SingleSentryStream>;
 
 #[inline(always)]
+/// Creates a broadcast stream from a given stream and broadcast channel sender.
 pub async fn broadcast_stream<T, S>(mut stream: S, tx: broadcast::Sender<T>)
 where
     S: Stream<Item = T> + Unpin,
@@ -345,6 +352,7 @@ where
     }
 }
 
+/// Implements `Stream` for `SingleSentryStream`.
 impl tokio_stream::Stream for SingleSentryStream {
     type Item = InboundMessage;
 

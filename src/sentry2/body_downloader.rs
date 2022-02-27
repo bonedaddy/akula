@@ -15,23 +15,20 @@ use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::HashMap;
 use mdbx::{EnvironmentKind, RO, RW};
 use rayon::{
-    iter::{
-        IndexedParallelIterator, IntoParallelIterator, ParallelBridge, ParallelDrainRange,
-        ParallelIterator,
-    },
-    slice::ParallelSliceMut,
+    iter::{IntoParallelIterator, ParallelDrainRange, ParallelIterator},
+    prelude::ParallelSliceMut,
 };
 use std::{sync::Arc, time::Duration};
 use tracing::{info, trace};
 
 pub type HashChunk = ArrayVec<H256, CHUNK_SIZE>;
 
-pub type BlockBodies = Vec<(
+pub type BodyForInsertion = (
     BlockNumber,
     H256,
     Vec<(H256, MessageWithSignature)>,
     BodyForStorage,
-)>;
+);
 
 pub struct BodyDownloader {
     pub sentry: Arc<Coordinator>,
@@ -39,6 +36,8 @@ pub struct BodyDownloader {
 
 impl BodyDownloader {
     #[inline]
+    /// Creates a new `BodyDownloader`
+    /// using the given connection facility.
     pub fn new<T, E>(
         conn: T,
         chain_config: ChainConfig,
@@ -71,7 +70,11 @@ impl BodyDownloader {
         txn: MdbxTransaction<'_, RW, E>,
     ) -> anyhow::Result<()> {
         let mut stream = self.sentry.recv().await?;
-        let block_number = txn.cursor(tables::BlockBody)?.last()?.unwrap().0 .0;
+        let block_number = txn
+            .cursor(tables::BlockBody)?
+            .last()?
+            .map(|((block_number, _), _)| block_number + 1)
+            .unwrap();
         trace!("block_number: {:#?}", block_number);
         let last_block_number = txn.cursor(tables::CanonicalHeader)?.last()?.unwrap().0;
         trace!("Last block number: {:#?}", last_block_number);
@@ -85,7 +88,7 @@ impl BodyDownloader {
         } else {
             (last_block_number - block_number, last_block_number)
         };
-        trace!("batch_size: {:#?}", batch_size);
+        trace!("Batch size: {:#?}", batch_size);
 
         let mut chunks = txn
             .cursor(tables::CanonicalHeader)?
@@ -98,14 +101,12 @@ impl BodyDownloader {
             .chunks(1024)
             .enumerate()
             .map(|(i, hashes)| {
-                (
-                    BlockNumber((i * CHUNK_SIZE) as u64) + block_number,
-                    HashChunk::from_iter(hashes.to_vec()),
-                )
+                let block_number = BlockNumber((i * CHUNK_SIZE) as u64) + block_number;
+                dbg!(block_number);
+                (block_number, HashChunk::from_iter(hashes.to_vec()))
             })
             .collect::<HashMap<_, _>>();
 
-        trace!("Chunks: {:#?}", chunks);
         let mut block_bodies = HashMap::new();
         let mut ticker = tokio::time::interval(Duration::from_secs(30));
 
@@ -153,7 +154,7 @@ impl BodyDownloader {
 
     #[inline(always)]
     pub fn insert_block_bodies<E: EnvironmentKind>(
-        block_bodies: BlockBodies,
+        block_bodies: Vec<BodyForInsertion>,
         txn: &'_ MdbxTransaction<'_, RW, E>,
     ) -> anyhow::Result<()> {
         let mut cursor = txn.cursor(tables::BlockBody)?;
@@ -186,21 +187,20 @@ impl BodyDownloader {
     pub fn prepare_block_bodies<E: EnvironmentKind>(
         block_bodies: hashbrown::hash_map::Drain<BlockNumber, Vec<BlockBody>>,
         txn: &'_ MdbxTransaction<'_, RW, E>,
-    ) -> anyhow::Result<BlockBodies> {
+    ) -> anyhow::Result<Vec<BodyForInsertion>> {
         let mut block_bodies = block_bodies.collect::<Vec<_>>();
         block_bodies.par_sort_unstable_by_key(|(number, _)| number.0);
         let start = block_bodies
             .iter()
             .map(|(number, _)| BlockNumber(number.0))
-            .next()
-            .unwrap();
+            .next();
 
         Ok(block_bodies
             .drain(..)
             .flat_map(|(_, v)| v)
             .zip(
                 txn.cursor(tables::CanonicalHeader)?
-                    .walk(Some(start))
+                    .walk(start)
                     .filter_map(Result::ok)
                     .filter_map(Option::Some),
             )

@@ -8,12 +8,10 @@ impl AtomicStatus {
     pub fn new(status: Status) -> Self {
         AtomicStatus(AtomicPtr::new(Box::into_raw(Box::new(status))))
     }
-
     #[inline(always)]
     pub fn load(&self) -> Status {
         unsafe { *self.0.load(std::sync::atomic::Ordering::Relaxed) }
     }
-
     #[inline(always)]
     pub fn store(&self, status: Status) {
         self.0.store(

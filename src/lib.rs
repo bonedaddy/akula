@@ -29,7 +29,9 @@
     const_num_from_num,
     array_chunks,
     slice_as_chunks,
-    iter_partition_in_place
+    iter_partition_in_place,
+    try_trait_v2,
+    try_trait_v2_residual
 )]
 #![recursion_limit = "256"]
 #![allow(

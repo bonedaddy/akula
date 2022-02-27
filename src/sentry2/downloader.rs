@@ -22,7 +22,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
     time::Duration,
 };
-use tracing::info;
+use tracing::{debug, info};
 
 pub struct HeaderDownloader {
     /// Sentry connector.
@@ -115,6 +115,7 @@ impl HeaderDownloader {
         } else {
             BlockNumber(BATCH_SIZE as u64)
         };
+        debug!("Batch size: {:?}", batch_size);
 
         let mut headers = Vec::<BlockHeader>::with_capacity(batch_size.into());
         while headers.len() < batch_size.into() {
@@ -129,6 +130,7 @@ impl HeaderDownloader {
         }
 
         assert!(headers.len() == batch_size.0 as usize);
+        debug!("Starting to save {} headers.", headers.len());
         self.flush(txn, headers)?;
         Ok(())
     }
@@ -216,6 +218,7 @@ impl HeaderDownloader {
 
         let value = valid_till.load(std::sync::atomic::Ordering::SeqCst) as usize;
         if value != 0 {
+            debug!("Invalidated {} block headers", value);
             headers.truncate(value - 1);
         }
     }
