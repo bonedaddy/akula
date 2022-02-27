@@ -27,7 +27,8 @@
     derive_default_enum,
     control_flow_enum,
     const_num_from_num,
-    array_chunks
+    array_chunks,
+    slice_as_chunks
 )]
 #![recursion_limit = "256"]
 #![allow(

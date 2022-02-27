@@ -1,9 +1,6 @@
 use akula::{
-    kv::tables,
     sentry::chain_config::ChainConfig,
-    sentry2::{
-        body_downloader::BodyDownloader, downloader::HeaderDownloader, SentryClient, BATCH_SIZE,
-    },
+    sentry2::{body_downloader::BodyDownloader, SentryClient},
 };
 use anyhow::Context;
 use clap::Parser;
@@ -51,28 +48,8 @@ async fn main() -> anyhow::Result<()> {
         chain_config.chain_spec().clone(),
     )?;
     txn.commit()?;
-
-    let block_number = db
-        .begin()?
-        .cursor(tables::CanonicalHeader)?
-        .last()?
-        .map(|(v, _)| v)
-        .unwrap();
-
-    let mut hd = HeaderDownloader::new(sentry.clone(), chain_config.clone(), db.begin()?)?;
-    let mut bd = BodyDownloader::new(sentry, chain_config, db.begin()?)?;
-
-    while block_number < BATCH_SIZE
-        || block_number
-            < db.begin()?
-                .cursor(tables::LastHeader)?
-                .last()?
-                .map(|(_, (v, _))| v)
-                .unwrap()
-    {
-        hd.step(db.begin_mutable()?).await?;
-        bd.step(db.begin_mutable()?).await?;
-    }
+    let mut bd = BodyDownloader::new(sentry.clone(), chain_config.clone(), db.begin()?)?;
+    bd.step(db.begin_mutable()?).await?;
 
     Ok(())
 }

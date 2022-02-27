@@ -24,9 +24,9 @@ use std::{
 };
 use tracing::info;
 
-pub struct HeaderDownloader {
+pub struct HeaderDownloader<const N: usize> {
     /// Sentry connector.
-    pub sentry: Arc<Coordinator>,
+    pub sentry: Arc<Coordinator<N>>,
     /// Our current height.
     pub height: BlockNumber,
     /// The hash known to belong to the canonical chain(defaults to our latest checkpoint or
@@ -42,7 +42,7 @@ pub struct HeaderDownloader {
     pub blocks_table: HashMap<H256, (BlockNumber, Option<u128>)>,
 }
 
-impl HeaderDownloader {
+impl<const N: usize> HeaderDownloader<N> {
     #[inline]
     pub fn new<T, C, E>(
         conn: T,
@@ -50,7 +50,7 @@ impl HeaderDownloader {
         txn: MdbxTransaction<'_, RO, E>,
     ) -> anyhow::Result<Self>
     where
-        T: Into<SentryPool>,
+        T: Into<SentryPool<N>>,
         C: Into<ChainConfig>,
         E: EnvironmentKind,
     {

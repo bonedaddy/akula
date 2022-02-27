@@ -1,9 +1,8 @@
 use crate::{
     models::{Block, BlockNumber, H256, U256},
     sentry::chain_config::ChainConfig,
-    sentry2::{types::*, CHUNK_SIZE},
+    sentry2::{body_downloader::HashChunk, types::*},
 };
-use arrayvec::ArrayVec;
 use async_trait::async_trait;
 use auto_impl::auto_impl;
 use ethereum_interfaces::sentry as grpc_sentry;
@@ -15,25 +14,20 @@ use std::{
 };
 use tokio::sync::broadcast;
 
-pub struct SentryPool(Vec<SentryClient>);
-
-impl From<SentryClient> for SentryPool {
+#[derive(Clone, Debug)]
+pub struct SentryPool<const N: usize>(pub [SentryClient; N]);
+impl const From<SentryClient> for SentryPool<1> {
+    #[inline(always)]
     fn from(sentry: SentryClient) -> Self {
-        Self(vec![sentry])
-    }
-}
-
-impl const From<Vec<SentryClient>> for SentryPool {
-    fn from(sentry: Vec<SentryClient>) -> Self {
-        Self(sentry)
+        Self([sentry])
     }
 }
 
 pub type SentryClient = grpc_sentry::sentry_client::SentryClient<tonic::transport::Channel>;
 
 #[derive(Clone)]
-pub struct Coordinator {
-    pub sentries: Vec<SentryClient>,
+pub struct Coordinator<const N: usize> {
+    pub sentries: [SentryClient; N],
     pub genesis_hash: H256,
     network_id: u64,
     hard_forks: Vec<u64>,
@@ -41,11 +35,11 @@ pub struct Coordinator {
     pub ping_counter: Arc<AtomicU64>,
 }
 
-impl Coordinator {
+impl<const N: usize> Coordinator<N> {
     #[inline]
     pub fn new<T, C>(sentry: T, chain_config: C, status: Status) -> Self
     where
-        T: Into<SentryPool>,
+        T: Into<SentryPool<N>>,
         C: Into<ChainConfig>,
     {
         let chain_config = chain_config.into();
@@ -76,7 +70,7 @@ pub type SentryInboundStream = futures_util::stream::Map<
 >;
 
 #[async_trait]
-impl SentryCoordinator for Coordinator {
+impl<const N: usize> SentryCoordinator for Coordinator<N> {
     #[inline(always)]
     fn update_status(&self, status: Status) -> anyhow::Result<()> {
         self.status.store(status);
@@ -113,7 +107,7 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
     #[inline(always)]
-    async fn send_body_request(&self, req: ArrayVec<H256, CHUNK_SIZE>) -> anyhow::Result<()> {
+    async fn send_body_request(&self, req: HashChunk) -> anyhow::Result<()> {
         self.set_status().await?;
         self.send_message(req.into(), PeerFilter::Random(10))
             .await?;
@@ -172,10 +166,12 @@ impl SentryCoordinator for Coordinator {
         ))
     }
 
+    #[inline(always)]
     async fn broadcast_block(&self, _block: Block, _total_difficulty: u128) -> anyhow::Result<()> {
         let _fut = async move || {};
         Ok(())
     }
+    #[inline(always)]
     async fn propagate_new_block_hashes(
         &self,
         _block_hashes: Vec<(H256, BlockNumber)>,
@@ -183,10 +179,12 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
 
+    #[inline(always)]
     async fn propagate_transactions(&self, _transactions: Vec<H256>) -> anyhow::Result<()> {
         Ok(())
     }
 
+    #[inline(always)]
     async fn update_head(
         &self,
         height: BlockNumber,
@@ -201,6 +199,7 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
 
+    #[inline(always)]
     async fn penalize_peer(&self, penalty: Penalty) -> anyhow::Result<()> {
         let _ = self
             .sentries
@@ -290,6 +289,7 @@ impl SentryCoordinator for Coordinator {
         Ok(())
     }
 
+    #[inline(always)]
     async fn peer_count(&self) -> anyhow::Result<u64> {
         let peer_count: u64 = futures_util::future::join_all(
             self.sentries
@@ -362,7 +362,7 @@ impl tokio_stream::Stream for SingleSentryStream {
                         msg,
                         peer_id: value.peer_id.unwrap_or_default().into(),
                     })),
-                    _ => std::task::Poll::Pending, //_ => return std::task::Poll::Pending,
+                    _ => std::task::Poll::Pending,
                 }
             }
             _ => std::task::Poll::Pending,
@@ -375,7 +375,7 @@ impl tokio_stream::Stream for SingleSentryStream {
 pub trait SentryCoordinator: Send + Sync {
     fn update_status(&self, status: Status) -> anyhow::Result<()>;
     async fn set_status(&self) -> anyhow::Result<()>;
-    async fn send_body_request(&self, req: ArrayVec<H256, CHUNK_SIZE>) -> anyhow::Result<()>;
+    async fn send_body_request(&self, req: HashChunk) -> anyhow::Result<()>;
     async fn send_header_request(&self, req: HeaderRequest) -> anyhow::Result<()>;
     async fn recv(&self) -> anyhow::Result<CoordinatorStream>;
     async fn recv_headers(&self) -> anyhow::Result<CoordinatorStream>;

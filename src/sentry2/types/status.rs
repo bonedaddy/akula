@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicPtr;
 pub struct AtomicStatus(AtomicPtr<Status>);
 
 impl AtomicStatus {
+    #[inline(always)]
     pub fn new(status: Status) -> Self {
         AtomicStatus(AtomicPtr::new(Box::into_raw(Box::new(status))))
     }

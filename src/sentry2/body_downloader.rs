@@ -9,18 +9,18 @@ use crate::{
 };
 use arrayvec::ArrayVec;
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
-use hashbrown::{HashMap, HashSet};
+use hashbrown::HashMap;
 use mdbx::{EnvironmentKind, RO, RW};
 use std::{sync::Arc, time::Duration};
 use tracing::{info, trace};
 
-pub struct BodyDownloader {
-    pub sentry: Arc<Coordinator>,
-}
-
 pub type HashChunk = ArrayVec<H256, CHUNK_SIZE>;
 
-impl BodyDownloader {
+pub struct BodyDownloader<const N: usize> {
+    pub sentry: Arc<Coordinator<N>>,
+}
+
+impl<const N: usize> BodyDownloader<N> {
     #[inline]
     pub fn new<T, C, E>(
         conn: T,
@@ -28,7 +28,7 @@ impl BodyDownloader {
         txn: MdbxTransaction<'_, RO, E>,
     ) -> anyhow::Result<Self>
     where
-        T: Into<SentryPool>,
+        T: Into<SentryPool<N>>,
         C: Into<ChainConfig>,
         E: EnvironmentKind,
     {
@@ -56,7 +56,9 @@ impl BodyDownloader {
     ) -> anyhow::Result<()> {
         let mut stream = self.sentry.recv().await?;
         let block_number = txn.cursor(tables::BlockBody)?.last()?.unwrap().0 .0;
+        trace!("block_number: {:#?}", block_number);
         let last_block_number = txn.cursor(tables::CanonicalHeader)?.last()?.unwrap().0;
+        trace!("Last block number: {:#?}", last_block_number);
 
         let (batch_size, _) = if last_block_number - block_number >= BlockNumber(BATCH_SIZE as u64)
         {
@@ -67,19 +69,16 @@ impl BodyDownloader {
         } else {
             (last_block_number - block_number, last_block_number)
         };
+        trace!("batch_size: {:#?}", batch_size);
 
         let mut chunks = txn
             .cursor(tables::CanonicalHeader)?
             .walk(Some(block_number))
-            .map_while(|v| {
-                let (number, hash) = v.unwrap();
-                if number - block_number < batch_size {
-                    Some(hash)
-                } else {
-                    None
-                }
+            .filter_map(Result::ok)
+            .map_while(|(number, hash)| -> Option<H256> {
+                (number - block_number < batch_size).then(|| hash)
             })
-            .collect::<ArrayVec<_, BATCH_SIZE>>()
+            .collect::<Vec<_>>()
             .chunks(1024)
             .enumerate()
             .map(|(i, hashes)| {
@@ -91,7 +90,7 @@ impl BodyDownloader {
             .collect::<HashMap<_, _>>();
 
         trace!("Chunks: {:#?}", chunks);
-        let mut block_bodies = HashSet::new();
+        let mut block_bodies = HashMap::new();
         let mut ticker = tokio::time::interval(Duration::from_secs(30));
 
         while !chunks.is_empty() {
@@ -107,21 +106,19 @@ impl BodyDownloader {
                     if msg.is_none() { continue; }
                     match msg.unwrap().msg {
                         Message::BlockBodies(v) => {
-                                if !v.bodies.is_empty() && !block_bodies.contains(&v.bodies)
+                                if !v.bodies.is_empty() && !block_bodies.contains_key(&v.bodies)
                                     && (v.bodies.len() == CHUNK_SIZE || v.bodies.len() ==  (batch_size.0 as usize % CHUNK_SIZE)) {
-                                    let block_number = v.bodies.iter().filter_map(|v| {
-                                        if !v.ommers.is_empty() {
-                                            Some(v.ommers.last().unwrap().number - v.ommers.last().unwrap().number.0%1024)
-                                        } else {
-                                            None
-                                        }
-                                    }).last().unwrap();
+                                    let block_number = v.bodies.iter().rev().skip_while(|v| {
+                                        v.ommers.is_empty()
+                                    }).map(|v| {
+                                        BlockNumber(v.ommers.last().unwrap().number.0 - v.ommers.last().unwrap().number.0%1024)
+                                    }).next().unwrap();
                                     if !chunks.contains_key(&block_number) {
                                         continue;
                                     }
                                     info!("Received new block bodies, left requests={}, bodies total={}", chunks.len(), block_bodies.len());
                                     chunks.remove(&block_number);
-                                    block_bodies.insert(v.bodies);
+                                    block_bodies.insert(v.bodies, block_number);
                                 }
                         },
                         _ => continue,
@@ -129,6 +126,34 @@ impl BodyDownloader {
                 }
             }
         }
+
+        // let mut block_bodies = block_bodies
+        //     .into_iter()
+        //     .map(|(bodies, marker)| (bodies, marker))
+        //     .collect::<Vec<_>>();
+
+        // block_bodies.par_sort_unstable_by_key(|(_, number)| number.0);
+        // let start = block_bodies
+        //     .iter()
+        //     .map(|(_, number)| BlockNumber(number.0))
+        //     .next()
+        //     .unwrap();
+        // let mut hash_cursor = txn.cursor(tables::CanonicalHeader)?.walk(Some(start));
+        // let block_bodies = block_bodies
+        //     .into_iter()
+        //     .flat_map(|(bodies, _)| bodies)
+        //     .map(|body| {
+        //         hash_cursor
+        //             .next()
+        //             .unwrap()
+        //             .map(|(number, hash)| (number, hash, body))
+        //             .unwrap()
+        //     })
+        //     .collect::<Vec<_>>();
+
+        // for item in block_bodies.iter().take(10) {
+        //     info!("{:#?}", item);
+        // }
 
         Ok(())
     }

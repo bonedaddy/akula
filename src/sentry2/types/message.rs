@@ -2,11 +2,10 @@ use super::{header::BlockHeaders, GetBlockBodies, HeaderRequest, PeerId};
 use crate::{
     models::{BlockBody, H256},
     sentry2::{
+        body_downloader::HashChunk,
         types::{GetBlockHeaders, GetBlockHeadersParams, NewBlock, NewBlockHashes},
-        CHUNK_SIZE,
     },
 };
-use arrayvec::ArrayVec;
 use ethereum_interfaces::sentry as grpc_sentry;
 use rlp_derive::{RlpDecodable, RlpDecodableWrapper, RlpEncodable, RlpEncodableWrapper};
 
@@ -147,9 +146,9 @@ impl From<Vec<H256>> for Message {
     }
 }
 
-impl From<ArrayVec<H256, CHUNK_SIZE>> for Message {
+impl From<HashChunk> for Message {
     #[inline(always)]
-    fn from(req: ArrayVec<H256, CHUNK_SIZE>) -> Self {
+    fn from(req: HashChunk) -> Self {
         Message::GetBlockBodies(GetBlockBodies {
             request_id: fastrand::u64(..),
             hashes: req.to_vec(),
