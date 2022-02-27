@@ -13,7 +13,7 @@ use anyhow::{bail, ensure, format_err, Context};
 use bytes::Bytes;
 use clap::Parser;
 use itertools::Itertools;
-use std::{borrow::Cow, path::PathBuf, sync::Arc};
+use std::{borrow::Cow, collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::pin;
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
@@ -110,7 +110,7 @@ pub struct HeaderDownloadOpts {
         help = "Sentry GRPC service URL as 'http://host:port'",
         default_value = "http://localhost:8000"
     )]
-    pub sentry_api_addr: akula::sentry::sentry_address::SentryAddress,
+    pub sentry_api_addr: akula::sentry_connector::sentry_address::SentryAddress,
 
     #[clap(flatten)]
     pub downloader_opts: akula::downloader::opts::Opts,
@@ -141,19 +141,22 @@ async fn blockhashes(data_dir: AkulaDataDir) -> anyhow::Result<()> {
 
 #[allow(unreachable_code)]
 async fn header_download(data_dir: AkulaDataDir, opts: HeaderDownloadOpts) -> anyhow::Result<()> {
-    let chains_config = akula::sentry::chain_config::ChainsConfig::new();
+    let chains_config = akula::sentry_connector::chain_config::ChainsConfig::new()?;
     let chain_config = chains_config.get(&opts.chain_name)?;
 
     let sentry_api_addr = opts.sentry_api_addr.clone();
     let sentry_connector =
-        akula::sentry::sentry_client_connector::SentryClientConnectorImpl::new(sentry_api_addr);
+        akula::sentry_connector::sentry_client_connector::SentryClientConnectorImpl::new(
+            sentry_api_addr,
+        );
 
     let sentry_status_provider =
         akula::downloader::sentry_status_provider::SentryStatusProvider::new(chain_config.clone());
-    let mut sentry_reactor = akula::sentry::sentry_client_reactor::SentryClientReactor::new(
-        Box::new(sentry_connector),
-        sentry_status_provider.current_status_stream(),
-    );
+    let mut sentry_reactor =
+        akula::sentry_connector::sentry_client_reactor::SentryClientReactor::new(
+            Box::new(sentry_connector),
+            sentry_status_provider.current_status_stream(),
+        );
     sentry_reactor.start()?;
     let sentry = sentry_reactor.into_shared();
 
@@ -419,7 +422,12 @@ fn read_storage(data_dir: AkulaDataDir, address: Address) -> anyhow::Result<()> 
 
     let tx = env.begin()?;
 
-    println!("{:?}", tx.get(tables::Storage, address)?);
+    println!(
+        "{:?}",
+        tx.cursor(tables::Storage)?
+            .walk_dup(address)
+            .collect::<anyhow::Result<Vec<_>>>()?
+    );
 
     Ok(())
 }
@@ -435,7 +443,7 @@ fn read_storage_changes(data_dir: AkulaDataDir, block: BlockNumber) -> anyhow::R
 
     pin!(walker);
 
-    let mut current_entry = None;
+    let mut changes = BTreeMap::<Address, BTreeMap<H256, U256>>::new();
     while let Some((
         tables::StorageChangeKey {
             block_number,
@@ -444,22 +452,15 @@ fn read_storage_changes(data_dir: AkulaDataDir, block: BlockNumber) -> anyhow::R
         tables::StorageChange { location, value },
     )) = walker.next().transpose()?
     {
-        let finished = block_number >= block;
-
-        let (current_address, current_storage) =
-            current_entry.get_or_insert_with(|| (address, vec![]));
-
-        if address != *current_address || finished {
-            println!("{:?}: {:?}", current_address, current_storage);
-            *current_address = address;
-            *current_storage = vec![];
-        }
-
-        if finished {
+        if block_number > block {
             break;
         }
 
-        current_storage.push((location, value));
+        changes.entry(address).or_default().insert(location, value);
+    }
+
+    for (address, slots) in changes {
+        println!("{:?}: {:?}", address, slots);
     }
 
     Ok(())

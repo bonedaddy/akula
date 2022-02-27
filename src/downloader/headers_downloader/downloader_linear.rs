@@ -13,11 +13,10 @@ use super::{
     verification::header_slice_verifier::HeaderSliceVerifier,
 };
 use crate::{
-    kv::mdbx::MdbxTransaction,
+    kv::mdbx::*,
     models::BlockNumber,
-    sentry::{chain_config::ChainConfig, sentry_client_reactor::*},
+    sentry_connector::{chain_config::ChainConfig, sentry_client_reactor::*},
 };
-use mdbx::{EnvironmentKind, RW};
 use std::sync::Arc;
 use tracing::*;
 
@@ -160,7 +159,7 @@ impl DownloaderLinear {
         let save_stage = SaveStage::new(
             header_slices.clone(),
             db_transaction,
-            save_stage::SaveOrder::Monotonic,
+            save_stage::SaveOrder::Random,
             true,
         );
         let refill_stage = RefillStage::new(header_slices.clone());

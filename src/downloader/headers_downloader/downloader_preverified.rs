@@ -1,5 +1,3 @@
-use mdbx::{EnvironmentKind, RW};
-
 use super::{
     downloader_stage_loop::DownloaderStageLoop,
     headers::{
@@ -11,7 +9,7 @@ use super::{
     ui::ui_system::{UISystemShared, UISystemViewScope},
     verification::preverified_hashes_config::PreverifiedHashesConfig,
 };
-use crate::{kv::mdbx::MdbxTransaction, models::BlockNumber, sentry::sentry_client_reactor::*};
+use crate::{kv::mdbx::*, models::*, sentry_connector::sentry_client_reactor::*};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -102,7 +100,7 @@ impl DownloaderPreverified {
         let save_stage = SaveStage::new(
             header_slices.clone(),
             db_transaction,
-            save_stage::SaveOrder::Monotonic,
+            save_stage::SaveOrder::Random,
             true,
         );
         let refill_stage = RefillStage::new(header_slices.clone());

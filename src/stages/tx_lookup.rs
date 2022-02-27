@@ -1,12 +1,11 @@
 use crate::{
     etl::collector::*,
     kv::{mdbx::*, tables},
-    models::BodyForStorage,
+    models::*,
     stagedsync::{stage::*, stages::*},
     StageId,
 };
 use async_trait::async_trait;
-use mdbx::EnvironmentKind;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::pin;
@@ -130,11 +129,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        accessors::chain,
-        kv::new_mem_database,
-        models::{MessageWithSignature, *},
-    };
+    use crate::{accessors::chain, kv::new_mem_database};
     use bytes::Bytes;
     use hex_literal::hex;
     use std::time::Instant;

@@ -9,7 +9,6 @@ use crate::{
     StageId,
 };
 use async_trait::async_trait;
-use mdbx::EnvironmentKind;
 use rayon::prelude::*;
 use std::time::{Duration, Instant};
 use tokio::pin;

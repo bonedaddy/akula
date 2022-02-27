@@ -9,7 +9,6 @@ use crate::{
 };
 use anyhow::format_err;
 use async_trait::async_trait;
-use mdbx::{EnvironmentKind, RW};
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::pin;

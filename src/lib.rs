@@ -2,6 +2,7 @@
     bool_to_option,
     generator_trait,
     generators,
+    const_for,
     let_else,
     map_first_last,
     never_type,
@@ -22,7 +23,6 @@
     const_precise_live_drops,
     const_result,
     const_convert,
-    entry_insert,
     const_mut_refs,
     derive_default_enum,
     control_flow_enum,
@@ -31,7 +31,8 @@
     slice_as_chunks,
     iter_partition_in_place,
     try_trait_v2,
-    try_trait_v2_residual
+    try_trait_v2_residual,
+poll_ready,
 )]
 #![recursion_limit = "256"]
 #![allow(
@@ -57,6 +58,7 @@ pub mod models;
 pub mod res;
 pub mod sentry;
 pub mod sentry2;
+pub mod sentry_connector;
 pub mod stagedsync;
 pub mod stages;
 mod state;

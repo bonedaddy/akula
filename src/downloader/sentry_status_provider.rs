@@ -1,12 +1,11 @@
 use crate::{
     kv::{
-        mdbx::MdbxTransaction,
+        mdbx::*,
         tables::{self, HeaderKey},
     },
     models::*,
-    sentry::{chain_config::ChainConfig, sentry_client::Status, sentry_client_connector},
+    sentry_connector::{chain_config::ChainConfig, sentry_client::Status, sentry_client_connector},
 };
-use mdbx::{EnvironmentKind, RW};
 use std::fmt;
 use tokio::sync::watch;
 use tracing::debug;
@@ -47,13 +46,13 @@ impl SentryStatusProvider {
         Box::pin(stream)
     }
 
-    async fn read_status<'db, E: EnvironmentKind>(
+    fn read_status<E: EnvironmentKind>(
         &self,
-        tx: &MdbxTransaction<'db, RW, E>,
+        tx: &MdbxTransaction<'_, RW, E>,
     ) -> anyhow::Result<Status> {
-        let (_, header_hash) = tx
+        let header_hash = tx
             .get(tables::LastHeader, Default::default())?
-            .ok_or(SentryStatusProviderError::StatusDataNotFound)?;
+            .ok_or(SentryStatusProviderError::StatusDataNotFound)?.1;
 
         let block_num = tx
             .get(tables::HeaderNumber, header_hash)?
@@ -74,13 +73,11 @@ impl SentryStatusProvider {
         Ok(status)
     }
 
-    pub async fn update<'db, E: EnvironmentKind>(
+    pub fn update<E: EnvironmentKind>(
         &self,
-        tx: &MdbxTransaction<'db, RW, E>,
+        tx: &MdbxTransaction<'_, RW, E>,
     ) -> anyhow::Result<()> {
-        let result = self.read_status(tx).await;
-
-        match result {
+        match self.read_status(tx) {
             Ok(status) => {
                 self.sender.send(status)?;
                 Ok(())

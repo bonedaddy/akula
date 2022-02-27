@@ -1,7 +1,6 @@
 use super::data_provider::*;
-use crate::kv::{mdbx::MdbxCursor, tables::ErasedTable, traits::*};
+use crate::kv::{mdbx::*, tables::ErasedTable, traits::*};
 use derive_more::*;
-use mdbx::RW;
 use std::{
     cmp::Reverse,
     collections::BinaryHeap,

@@ -10,5 +10,5 @@ pub use headers_downloader::{
         DownloaderRunState as HeadersDownloaderRunState,
         DownloaderUnwindRequest as HeadersDownloaderUnwindRequest,
     },
-    verification::{header_slice_verifier, preverified_hashes_config::PreverifiedHashesConfig},
+    verification::header_slice_verifier,
 };

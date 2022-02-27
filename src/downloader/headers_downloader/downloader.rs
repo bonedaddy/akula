@@ -4,11 +4,10 @@ use super::{
     ui::ui_system::UISystemShared, verification::header_slice_verifier::HeaderSliceVerifier,
 };
 use crate::{
-    kv::mdbx::MdbxTransaction,
+    kv::mdbx::*,
     models::*,
-    sentry::{chain_config::ChainConfig, sentry_client_reactor::*},
+    sentry_connector::{chain_config::ChainConfig, sentry_client_reactor::*},
 };
-use mdbx::{EnvironmentKind, RW};
 use parking_lot::Mutex;
 use std::{
     fmt::{Debug, Formatter},

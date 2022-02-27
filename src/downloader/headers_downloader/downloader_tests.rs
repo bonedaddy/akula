@@ -12,7 +12,7 @@ use super::{
 use crate::{
     kv,
     models::*,
-    sentry::{
+    sentry_connector::{
         chain_config, sentry_client_connector,
         sentry_client_connector::SentryClientConnectorTest,
         sentry_client_mock::SentryClientMock,
@@ -27,7 +27,7 @@ use std::{
 use tokio::sync::Mutex as AsyncMutex;
 
 fn make_chain_config() -> chain_config::ChainConfig {
-    let chains_config = chain_config::ChainsConfig::new();
+    let chains_config = chain_config::ChainsConfig::new().unwrap();
     let chain_name = "mainnet";
     chains_config.get(chain_name).unwrap()
 }

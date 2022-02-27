@@ -7,7 +7,7 @@ use akula::{
         traits::*,
     },
     models::*,
-    sentry::{
+    sentry_connector::{
         sentry_client_connector::SentryClientConnectorImpl,
         sentry_client_reactor::SentryClientReactor,
     },
@@ -18,7 +18,6 @@ use akula::{
 use anyhow::{bail, format_err, Context};
 use async_trait::async_trait;
 use clap::Parser;
-use mdbx::EnvironmentKind;
 use rayon::prelude::*;
 use std::{
     panic,
@@ -55,7 +54,7 @@ pub struct Opt {
         help = "Sentry GRPC service URL as 'http://host:port'",
         default_value = "http://localhost:8000"
     )]
-    pub sentry_api_addr: akula::sentry::sentry_address::SentryAddress,
+    pub sentry_api_addr: akula::sentry_connector::sentry_address::SentryAddress,
 
     /// Last block where to sync to.
     #[clap(long)]
@@ -187,7 +186,7 @@ where
             )?;
 
             if block_number.0 % 500_000 == 0 {
-                info!("Extracted block {}", block_number);
+                info!("Extracted block #{block_number}");
             }
         }
 
@@ -300,7 +299,7 @@ where
             )?
             .unwrap();
 
-        let mut starting_index = prev_body.base_tx_id + prev_body.tx_amount;
+        let mut starting_index = prev_body.base_tx_id + prev_body.tx_amount as u64;
         let canonical_header_walker = canonical_header_cur.walk(Some(highest_block + 1u8));
         pin!(canonical_header_walker);
         let erigon_body_walker =
@@ -468,7 +467,7 @@ where
             let mut deleted = 0;
             while deleted < body.tx_amount {
                 let to_delete = body.base_tx_id + deleted;
-                if block_tx_cur.seek(to_delete)?.is_some() {
+                if block_tx_cur.seek_exact(to_delete)?.is_some() {
                     block_tx_cur.delete_current()?;
                 }
 
@@ -562,7 +561,7 @@ fn main() -> anyhow::Result<()> {
             rt.block_on(async move {
                 info!("Starting Akula ({})", version_string());
 
-                let chains_config = akula::sentry::chain_config::ChainsConfig::new();
+                let chains_config = akula::sentry_connector::chain_config::ChainsConfig::new()?;
                 let chain_config = chains_config.get(&opt.chain_name)?;
 
                 // database setup

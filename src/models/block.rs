@@ -4,7 +4,7 @@ use derive_more::Deref;
 use parity_scale_codec::*;
 use rlp_derive::*;
 use sha3::*;
-use std::{borrow::Borrow, hash::Hasher};
+use std::borrow::Borrow;
 
 #[derive(Clone, Debug, PartialEq, Eq, RlpEncodable, RlpDecodable)]
 pub struct Block {
@@ -71,22 +71,10 @@ impl From<Block> for BlockWithSenders {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, RlpEncodable, RlpDecodable, Eq)]
+#[derive(Clone, Debug, PartialEq, RlpEncodable, RlpDecodable)]
 pub struct BlockBody {
     pub transactions: Vec<MessageWithSignature>,
     pub ommers: Vec<BlockHeader>,
-}
-
-#[allow(clippy::derive_hash_xor_eq)]
-impl std::hash::Hash for BlockBody {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        for tx in &self.transactions {
-            state.write(&tx.hash().0)
-        }
-        for ommer in &self.ommers {
-            state.write(&ommer.hash().0)
-        }
-    }
 }
 
 impl From<Block> for BlockBody {

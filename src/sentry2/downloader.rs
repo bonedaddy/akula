@@ -4,7 +4,7 @@ use crate::{
         tables::{self, VariableVec},
     },
     models::{BlockHeader, BlockNumber, H256},
-    sentry::chain_config::ChainConfig,
+    sentry_connector::chain_config::ChainConfig,
     sentry2::{
         types::{HeaderRequest, Message, Status},
         Coordinator, CoordinatorStream, SentryCoordinator, SentryPool, BATCH_SIZE, CHUNK_SIZE,

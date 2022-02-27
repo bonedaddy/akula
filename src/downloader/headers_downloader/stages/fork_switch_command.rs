@@ -1,5 +1,3 @@
-use mdbx::{EnvironmentKind, RW};
-
 use super::{
     headers::{
         header_slices,
@@ -7,7 +5,7 @@ use super::{
     },
     SaveStage,
 };
-use crate::{kv::mdbx::MdbxTransaction, models::BlockNumber};
+use crate::{kv::mdbx::*, models::BlockNumber};
 use std::{
     ops::{DerefMut, Range},
     sync::Arc,
@@ -133,7 +131,7 @@ impl ForkSwitchCommand {
                     if header.number() <= self.connection_block_num {
                         continue;
                     }
-                    SaveStage::update_canonical_chain_header(&header, tx)?;
+                    SaveStage::update_canonical_chain_header(&header, None, tx)?;
                 }
             }
 

@@ -1,6 +1,6 @@
 use crate::{
     models::{Block, BlockNumber, H256, U256},
-    sentry::chain_config::ChainConfig,
+    sentry_connector::chain_config::ChainConfig,
     sentry2::{body_downloader::HashChunk, types::*},
 };
 use async_trait::async_trait;

@@ -1,9 +1,8 @@
 use crate::{
-    kv::{mdbx::MdbxTransaction, tables},
+    kv::{mdbx::*, tables},
     models::*,
     state::*,
 };
-use mdbx::{EnvironmentKind, RW};
 use tempfile::TempDir;
 
 #[derive(Clone, Debug)]
@@ -141,10 +140,10 @@ where
     txn.set(
         tables::LastHeader,
         Default::default(),
-        (genesis, block_hash),
+        (BlockNumber(0), block_hash),
     )?;
 
-    txn.set(tables::Config, block_hash, chainspec)?;
+    txn.set(tables::Config, Default::default(), chainspec)?;
 
     Ok(true)
 }

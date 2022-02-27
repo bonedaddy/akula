@@ -9,7 +9,7 @@ mod stages;
 
 mod downloader_forky;
 mod downloader_linear;
-pub mod downloader_preverified;
+mod downloader_preverified;
 mod downloader_stage_loop;
 
 #[cfg(test)]

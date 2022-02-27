@@ -6,7 +6,6 @@ use crate::{
     StageId,
 };
 use async_trait::async_trait;
-use mdbx::RW;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::pin;

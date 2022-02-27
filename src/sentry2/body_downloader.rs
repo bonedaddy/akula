@@ -4,7 +4,7 @@ use crate::{
         tables::{self, TruncateStart},
     },
     models::{BlockBody, BlockNumber, BodyForStorage, MessageWithSignature, TxIndex, H256},
-    sentry::chain_config::ChainConfig,
+    sentry_connector::chain_config::ChainConfig,
     sentry2::{
         types::{Message, Status},
         Coordinator, SentryCoordinator, SentryPool, BATCH_SIZE, CHUNK_SIZE,

@@ -1,5 +1,3 @@
-use mdbx::{EnvironmentKind, TransactionKind, RW};
-
 use super::{
     downloader_stage_loop::DownloaderStageLoop,
     headers::{
@@ -15,10 +13,9 @@ use super::{
     verification::header_slice_verifier::HeaderSliceVerifier,
 };
 use crate::{
-    kv,
-    kv::{mdbx::MdbxTransaction, tables::HeaderKey},
+    kv::{self, mdbx::*, tables::HeaderKey},
     models::BlockNumber,
-    sentry::{chain_config::ChainConfig, sentry_client_reactor::*},
+    sentry_connector::{chain_config::ChainConfig, sentry_client_reactor::*},
 };
 use std::{ops::ControlFlow, sync::Arc, time::Duration};
 
@@ -253,7 +250,7 @@ impl DownloaderForky {
         let save_stage = SaveStage::new(
             header_slices.clone(),
             db_transaction,
-            save_stage::SaveOrder::Monotonic,
+            save_stage::SaveOrder::Random,
             true,
         );
 
