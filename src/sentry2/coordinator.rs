@@ -1,7 +1,7 @@
 use crate::{
     models::{Block, BlockNumber, H256, U256},
-    sentry_connector::chain_config::ChainConfig,
     sentry2::{body_downloader::HashChunk, types::*},
+    sentry_connector::chain_config::ChainConfig,
 };
 use async_trait::async_trait;
 use auto_impl::auto_impl;
@@ -31,7 +31,7 @@ impl From<Vec<SentryClient>> for SentryPool {
 
 pub type SentryClient = grpc_sentry::sentry_client::SentryClient<tonic::transport::Channel>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Coordinator {
     pub sentries: Vec<SentryClient>,
     pub genesis_hash: H256,

@@ -32,7 +32,7 @@
     iter_partition_in_place,
     try_trait_v2,
     try_trait_v2_residual,
-poll_ready,
+    poll_ready
 )]
 #![recursion_limit = "256"]
 #![allow(

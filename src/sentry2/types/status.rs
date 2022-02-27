@@ -21,6 +21,12 @@ impl AtomicStatus {
     }
 }
 
+impl std::fmt::Debug for AtomicStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Status {{ .. }}")
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Status {
     pub height: u64,

@@ -4,12 +4,14 @@ use crate::{
         tables::{self, VariableVec},
     },
     models::{BlockHeader, BlockNumber, H256},
-    sentry_connector::chain_config::ChainConfig,
     sentry2::{
         types::{HeaderRequest, Message, Status},
         Coordinator, CoordinatorStream, SentryCoordinator, SentryPool, BATCH_SIZE, CHUNK_SIZE,
     },
+    sentry_connector::chain_config::ChainConfig,
+    stagedsync::stage::{ExecOutput, Stage, StageInput, UnwindInput, UnwindOutput},
 };
+use async_trait::async_trait;
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::HashMap;
 use hashlink::{LinkedHashMap, LinkedHashSet, LruCache};
@@ -24,6 +26,7 @@ use std::{
 };
 use tracing::{debug, info};
 
+#[derive(Debug)]
 pub struct HeaderDownloader {
     /// Sentry connector.
     pub sentry: Arc<Coordinator>,
@@ -40,6 +43,35 @@ pub struct HeaderDownloader {
     pub parents_table: HashMap<H256, H256>,
     /// Mapping from the block hash to it's number and optionally total difficulty.
     pub blocks_table: HashMap<H256, (BlockNumber, Option<u128>)>,
+}
+
+#[async_trait]
+impl<'db, E> Stage<'db, E> for HeaderDownloader
+where
+    E: EnvironmentKind,
+{
+    fn id(&self) -> crate::StageId {
+        todo!()
+    }
+
+    async fn execute<'tx>(
+        &mut self,
+        _: &'tx mut MdbxTransaction<'db, RW, E>,
+        _: StageInput,
+    ) -> anyhow::Result<ExecOutput>
+    where
+        'db: 'tx,
+    {
+        todo!();
+    }
+
+    async fn unwind<'tx>(
+        &mut self,
+        _: &'tx mut MdbxTransaction<'db, RW, E>,
+        _: UnwindInput,
+    ) -> anyhow::Result<UnwindOutput> {
+        todo!();
+    }
 }
 
 impl HeaderDownloader {

@@ -4,13 +4,15 @@ use crate::{
         tables::{self, TruncateStart},
     },
     models::{BlockBody, BlockNumber, BodyForStorage, MessageWithSignature, TxIndex, H256},
-    sentry_connector::chain_config::ChainConfig,
     sentry2::{
         types::{Message, Status},
         Coordinator, SentryCoordinator, SentryPool, BATCH_SIZE, CHUNK_SIZE,
     },
+    sentry_connector::chain_config::ChainConfig,
+    stagedsync::stage::{ExecOutput, Stage, StageInput, UnwindInput, UnwindOutput},
 };
 use arrayvec::ArrayVec;
+use async_trait::async_trait;
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::HashMap;
 use mdbx::{EnvironmentKind, RO, RW};
@@ -30,8 +32,36 @@ pub type BodyForInsertion = (
     BodyForStorage,
 );
 
+#[derive(Debug)]
 pub struct BodyDownloader {
     pub sentry: Arc<Coordinator>,
+}
+
+#[async_trait]
+impl<'db, E> Stage<'db, E> for BodyDownloader
+where
+    E: EnvironmentKind,
+{
+    fn id(&self) -> crate::StageId {
+        todo!()
+    }
+    async fn execute<'tx>(
+        &mut self,
+        _: &'tx mut MdbxTransaction<'db, RW, E>,
+        _: StageInput,
+    ) -> anyhow::Result<ExecOutput>
+    where
+        'db: 'tx,
+    {
+        todo!();
+    }
+    async fn unwind<'tx>(
+        &mut self,
+        _: &'tx mut MdbxTransaction<'db, RW, E>,
+        _: UnwindInput,
+    ) -> anyhow::Result<UnwindOutput> {
+        todo!();
+    }
 }
 
 impl BodyDownloader {
