@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         chain_config.chain_spec().clone(),
     )?;
     txn.commit()?;
-    let mut bd = BodyDownloader::new(sentry.clone(), chain_config.clone(), db.begin()?)?;
+    let mut bd = BodyDownloader::new(sentry, chain_config, db.begin()?)?;
     bd.step(db.begin_mutable()?).await?;
 
     Ok(())

@@ -16,27 +16,26 @@ use tracing::{info, trace};
 
 pub type HashChunk = ArrayVec<H256, CHUNK_SIZE>;
 
-pub struct BodyDownloader<const N: usize> {
-    pub sentry: Arc<Coordinator<N>>,
+pub struct BodyDownloader {
+    pub sentry: Arc<Coordinator>,
 }
 
-impl<const N: usize> BodyDownloader<N> {
+impl BodyDownloader {
     #[inline]
-    pub fn new<T, C, E>(
+    pub fn new<T, E>(
         conn: T,
-        chain_config: C,
+        chain_config: ChainConfig,
         txn: MdbxTransaction<'_, RO, E>,
     ) -> anyhow::Result<Self>
     where
-        T: Into<SentryPool<N>>,
-        C: Into<ChainConfig>,
+        T: Into<SentryPool>,
         E: EnvironmentKind,
     {
         let block = txn.cursor(tables::CanonicalHeader)?.last()?.unwrap();
         Ok(Self {
             sentry: Arc::new(Coordinator::new(
                 conn,
-                chain_config.into(),
+                chain_config,
                 Status::new(
                     block.0 .0,
                     block.1,

@@ -15,19 +15,26 @@ use std::{
 use tokio::sync::broadcast;
 
 #[derive(Clone, Debug)]
-pub struct SentryPool<const N: usize>(pub [SentryClient; N]);
-impl const From<SentryClient> for SentryPool<1> {
+pub struct SentryPool(pub Vec<SentryClient>);
+
+impl From<SentryClient> for SentryPool {
     #[inline(always)]
     fn from(sentry: SentryClient) -> Self {
-        Self([sentry])
+        Self(vec![sentry])
+    }
+}
+impl From<Vec<SentryClient>> for SentryPool {
+    #[inline(always)]
+    fn from(sentries: Vec<SentryClient>) -> Self {
+        Self(sentries)
     }
 }
 
 pub type SentryClient = grpc_sentry::sentry_client::SentryClient<tonic::transport::Channel>;
 
 #[derive(Clone)]
-pub struct Coordinator<const N: usize> {
-    pub sentries: [SentryClient; N],
+pub struct Coordinator {
+    pub sentries: Vec<SentryClient>,
     pub genesis_hash: H256,
     network_id: u64,
     hard_forks: Vec<u64>,
@@ -35,14 +42,12 @@ pub struct Coordinator<const N: usize> {
     pub ping_counter: Arc<AtomicU64>,
 }
 
-impl<const N: usize> Coordinator<N> {
+impl Coordinator {
     #[inline]
-    pub fn new<T, C>(sentry: T, chain_config: C, status: Status) -> Self
+    pub fn new<T>(sentry: T, chain_config: ChainConfig, status: Status) -> Self
     where
-        T: Into<SentryPool<N>>,
-        C: Into<ChainConfig>,
+        T: Into<SentryPool>,
     {
-        let chain_config = chain_config.into();
         Self {
             sentries: sentry.into().0,
             status: Arc::new(AtomicStatus::new(status)),
@@ -70,7 +75,7 @@ pub type SentryInboundStream = futures_util::stream::Map<
 >;
 
 #[async_trait]
-impl<const N: usize> SentryCoordinator for Coordinator<N> {
+impl SentryCoordinator for Coordinator {
     #[inline(always)]
     fn update_status(&self, status: Status) -> anyhow::Result<()> {
         self.status.store(status);
