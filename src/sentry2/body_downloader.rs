@@ -1,6 +1,9 @@
 use crate::{
-    kv::{mdbx::MdbxTransaction, tables},
-    models::{BlockNumber, H256},
+    kv::{
+        mdbx::MdbxTransaction,
+        tables::{self, TruncateStart},
+    },
+    models::{BlockBody, BlockNumber, BodyForStorage, MessageWithSignature, TxIndex, H256},
     sentry::chain_config::ChainConfig,
     sentry2::{
         types::{Message, Status},
@@ -11,10 +14,24 @@ use arrayvec::ArrayVec;
 use futures_util::{select, stream::FuturesUnordered, FutureExt, StreamExt};
 use hashbrown::HashMap;
 use mdbx::{EnvironmentKind, RO, RW};
+use rayon::{
+    iter::{
+        IndexedParallelIterator, IntoParallelIterator, ParallelBridge, ParallelDrainRange,
+        ParallelIterator,
+    },
+    slice::ParallelSliceMut,
+};
 use std::{sync::Arc, time::Duration};
 use tracing::{info, trace};
 
 pub type HashChunk = ArrayVec<H256, CHUNK_SIZE>;
+
+pub type BlockBodies = Vec<(
+    BlockNumber,
+    H256,
+    Vec<(H256, MessageWithSignature)>,
+    BodyForStorage,
+)>;
 
 pub struct BodyDownloader {
     pub sentry: Arc<Coordinator>,
@@ -31,15 +48,15 @@ impl BodyDownloader {
         T: Into<SentryPool>,
         E: EnvironmentKind,
     {
-        let block = txn.cursor(tables::CanonicalHeader)?.last()?.unwrap();
+        let (block_number, hash) = txn.cursor(tables::CanonicalHeader)?.last()?.unwrap();
         Ok(Self {
             sentry: Arc::new(Coordinator::new(
                 conn,
                 chain_config,
                 Status::new(
-                    block.0 .0,
-                    block.1,
-                    txn.get(tables::HeadersTotalDifficulty, block)?
+                    block_number.0,
+                    hash,
+                    txn.get(tables::HeadersTotalDifficulty, (block_number, hash))?
                         .unwrap()
                         .to_be_bytes()
                         .into(),
@@ -105,8 +122,7 @@ impl BodyDownloader {
                     if msg.is_none() { continue; }
                     match msg.unwrap().msg {
                         Message::BlockBodies(v) => {
-                                if !v.bodies.is_empty() && !block_bodies.contains_key(&v.bodies)
-                                    && (v.bodies.len() == CHUNK_SIZE || v.bodies.len() ==  (batch_size.0 as usize % CHUNK_SIZE)) {
+                                if !v.bodies.is_empty() && (v.bodies.len() == CHUNK_SIZE || v.bodies.len() ==  (batch_size.0 as usize % CHUNK_SIZE)) {
                                     let block_number = v.bodies.iter().rev().skip_while(|v| {
                                         v.ommers.is_empty()
                                     }).map(|v| {
@@ -116,8 +132,8 @@ impl BodyDownloader {
                                         continue;
                                     }
                                     info!("Received new block bodies, left requests={}, bodies total={}", chunks.len(), block_bodies.len());
-                                    chunks.remove(&block_number);
-                                    block_bodies.insert(v.bodies, block_number);
+                                    assert!(chunks.remove(&block_number).is_some());
+                                    block_bodies.insert(block_number, v.bodies);
                                 }
                         },
                         _ => continue,
@@ -126,34 +142,88 @@ impl BodyDownloader {
             }
         }
 
-        // let mut block_bodies = block_bodies
-        //     .into_iter()
-        //     .map(|(bodies, marker)| (bodies, marker))
-        //     .collect::<Vec<_>>();
+        Self::insert_block_bodies(
+            Self::prepare_block_bodies(block_bodies.drain(), &txn)?,
+            &txn,
+        )?;
 
-        // block_bodies.par_sort_unstable_by_key(|(_, number)| number.0);
-        // let start = block_bodies
-        //     .iter()
-        //     .map(|(_, number)| BlockNumber(number.0))
-        //     .next()
-        //     .unwrap();
-        // let mut hash_cursor = txn.cursor(tables::CanonicalHeader)?.walk(Some(start));
-        // let block_bodies = block_bodies
-        //     .into_iter()
-        //     .flat_map(|(bodies, _)| bodies)
-        //     .map(|body| {
-        //         hash_cursor
-        //             .next()
-        //             .unwrap()
-        //             .map(|(number, hash)| (number, hash, body))
-        //             .unwrap()
-        //     })
-        //     .collect::<Vec<_>>();
+        txn.commit()?;
+        Ok(())
+    }
 
-        // for item in block_bodies.iter().take(10) {
-        //     info!("{:#?}", item);
-        // }
+    #[inline(always)]
+    pub fn insert_block_bodies<E: EnvironmentKind>(
+        block_bodies: BlockBodies,
+        txn: &'_ MdbxTransaction<'_, RW, E>,
+    ) -> anyhow::Result<()> {
+        let mut cursor = txn.cursor(tables::BlockBody)?;
+        let mut block_tx_cursor = txn.cursor(tables::BlockTransaction)?;
+        let mut lookup_cursor = txn.cursor(tables::BlockTransactionLookup)?;
+        let mut base_tx_id = cursor
+            .last()?
+            .map(|((_, _), v)| v.base_tx_id.0 + v.tx_amount)
+            .unwrap();
+
+        block_bodies.into_iter().try_for_each(
+            |(block_number, hash, transactions, mut body)| -> anyhow::Result<()> {
+                body.base_tx_id = TxIndex(base_tx_id);
+                cursor.put((block_number, hash), body)?;
+                transactions
+                    .into_iter()
+                    .try_for_each(|(hash, transaction)| -> anyhow::Result<()> {
+                        base_tx_id += 1;
+                        lookup_cursor.put(hash, TruncateStart(block_number))?;
+                        block_tx_cursor.put(TxIndex(base_tx_id), transaction)?;
+                        Ok(())
+                    })
+            },
+        )?;
 
         Ok(())
+    }
+
+    #[inline(always)]
+    pub fn prepare_block_bodies<E: EnvironmentKind>(
+        block_bodies: hashbrown::hash_map::Drain<BlockNumber, Vec<BlockBody>>,
+        txn: &'_ MdbxTransaction<'_, RW, E>,
+    ) -> anyhow::Result<BlockBodies> {
+        let mut block_bodies = block_bodies.collect::<Vec<_>>();
+        block_bodies.par_sort_unstable_by_key(|(number, _)| number.0);
+        let start = block_bodies
+            .iter()
+            .map(|(number, _)| BlockNumber(number.0))
+            .next()
+            .unwrap();
+
+        Ok(block_bodies
+            .drain(..)
+            .flat_map(|(_, v)| v)
+            .zip(
+                txn.cursor(tables::CanonicalHeader)?
+                    .walk(Some(start))
+                    .filter_map(Result::ok)
+                    .filter_map(Option::Some),
+            )
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .map(|(mut body, (number, hash))| {
+                let txs = body
+                    .transactions
+                    .par_drain(..)
+                    .map(|tx| (tx.hash(), tx))
+                    .collect::<Vec<_>>();
+                let tx_amount = txs.len() as u64;
+                (
+                    number,
+                    hash,
+                    txs,
+                    BodyForStorage {
+                        base_tx_id: TxIndex(0),
+                        tx_amount,
+                        uncles: body.ommers,
+                    },
+                )
+            })
+            .collect::<Vec<_>>())
     }
 }
